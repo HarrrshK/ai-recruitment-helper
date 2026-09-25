@@ -1,0 +1,167 @@
+import { chromium } from "playwright";
+import assert from "node:assert/strict";
+
+const base = process.env.TEST_BASE_URL || "http://127.0.0.1:3001";
+const api = process.env.TEST_API_URL || "http://127.0.0.1:8002";
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", headless: true, args: ["--no-proxy-server"] });
+const stamp = Date.now();
+const errors = [];
+async function page(width = 1440) {
+  const p = await browser.newPage({ viewport: { width, height: 1000 } });
+  p.on("pageerror", e => errors.push(e.message));
+  await p.route("**/api/**", async route => {
+    const url = new URL(route.request().url());
+    const response = await route.fetch({ url: `${api}${url.pathname}${url.search}` });
+    await route.fulfill({ response });
+  });
+  return p;
+}
+async function shot(p, name) {
+  assert.equal(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Overflow: ${p.url()}`);
+  await p.screenshot({ path: `/tmp/recruiter-${name}.png`, fullPage: true });
+}
+
+try {
+  const hr = await page();
+  await hr.goto(`${base}/register?role=recruiter`);
+  await hr.getByLabel("Full Name").fill("Taylor Reed");
+  await hr.getByLabel("Email Address").fill(`hiring-${stamp}@example.com`);
+  await hr.getByLabel("Password", { exact: true }).fill("secret123");
+  await hr.getByRole("button", { name: "Create Account", exact: true }).click();
+  await hr.waitForURL("**/recruiter/company");
+  await hr.getByLabel("Company name", { exact: true }).fill("Northstar Labs");
+  await hr.getByLabel("Industry", { exact: true }).fill("Developer tools");
+  await hr.getByLabel("Location", { exact: true }).fill("Bengaluru");
+  await hr.getByLabel("Website", { exact: true }).fill("https://example.com");
+  await hr.getByLabel("Company size", { exact: true }).selectOption("51-200");
+  await hr.getByLabel("About the company").fill("We build dependable tools for teams delivering modern software.");
+  await hr.getByRole("button", { name: "Save company profile" }).click();
+  await hr.getByText("Company profile saved", { exact: true }).waitFor();
+  await hr.reload();
+  assert.equal(await hr.getByLabel("Company name", { exact: true }).inputValue(), "Northstar Labs");
+  await shot(hr, "company-desktop");
+  await hr.getByRole("navigation", { name: "Recruiter navigation", exact: true }).getByRole("link", { name: "Jobs", exact: true }).click();
+  await hr.getByRole("link", { name: "Create job", exact: true }).click();
+  await hr.getByLabel("Job title", { exact: true }).fill("Senior Platform Engineer");
+  await hr.getByLabel("Location", { exact: true }).fill("Bengaluru");
+  await hr.getByLabel("Work mode", { exact: true }).selectOption("hybrid");
+  await hr.getByLabel("Short summary", { exact: true }).fill("Build reliable Python services with a collaborative platform team.");
+  await hr.getByLabel("Job description", { exact: true }).fill("## The role\nBuild and operate Python APIs. Partner with product teams to improve service reliability.");
+  await hr.getByLabel("Required skills (comma separated)").fill("Python, SQL");
+  await hr.getByLabel("Preferred skills (comma separated)").fill("Docker, Kubernetes");
+  await hr.getByLabel("Minimum experience (years)").fill("3");
+  await hr.getByLabel("Responsibilities (one per line)").fill("Build APIs\nImprove platform reliability");
+  const created = hr.waitForResponse(r => r.url().endsWith("/api/recruiter/jobs") && r.request().method() === "POST");
+  await hr.getByRole("button", { name: "Save draft", exact: true }).click();
+  const job = await (await created).json();
+  assert.ok(job.id);
+  await hr.waitForURL("**/recruiter/jobs");
+  await hr.getByRole("link", { name: "Edit Senior Platform Engineer", exact: true }).click();
+  await hr.getByRole("heading", { name: "Edit job", exact: true }).waitFor();
+  await hr.getByLabel("Job status", { exact: true }).selectOption("ready");
+  const published = hr.waitForResponse(r => r.url().endsWith(`/api/recruiter/jobs/${job.id}`) && r.request().method() === "PUT");
+  await hr.getByRole("button", { name: "Save changes", exact: true }).click();
+  assert.equal((await (await published).json()).status, "ready");
+  await hr.waitForURL("**/recruiter/jobs");
+  await hr.locator("article").getByText("Open", { exact: true }).waitFor();
+  await shot(hr, "jobs-desktop");
+
+  async function seedCandidate(name, tag) {
+    const registered = await hr.request.post(`${api}/api/auth/register`, { data: { email: `${tag}-${stamp}@example.com`, password: "secret123", full_name: name, role: "candidate" } });
+    assert.equal(registered.status(), 200);
+    const session = await registered.json();
+    const headers = { Authorization: `Bearer ${session.access_token}` };
+    const uploaded = await hr.request.post(`${api}/api/portal/resumes`, { headers, multipart: { file: { name: `${tag}-resume.txt`, mimeType: "text/plain", buffer: Buffer.from(`${name}\nBuilt Python APIs and SQL data pipelines for five years.\nLed service reliability projects and mentored engineers.`) } } });
+    assert.equal(uploaded.status(), 201);
+    const application = await hr.request.post(`${api}/api/portal/applications`, { headers, data: { job_id: job.id, resume_id: (await uploaded.json()).id, cover_letter: "I would love to bring my Python experience to this team." } });
+    assert.equal(application.status(), 201);
+    return { session, headers, application: await application.json() };
+  }
+  const alex = await seedCandidate("Alex Morgan", "alex");
+  const sam = await seedCandidate("Sam Patel", "sam");
+  const candidate = await page();
+  await candidate.goto(base);
+  await candidate.evaluate(session => { localStorage.setItem("auth_token", session.access_token); localStorage.setItem("auth_user", JSON.stringify(session.user)); }, alex.session);
+  await hr.goto(`${base}/recruiter/applicants?job=${job.id}`);
+  await hr.getByRole("link", { name: "Alex Morgan", exact: true }).click();
+  await hr.getByRole("tab", { name: "Resume", exact: true }).click();
+  await hr.getByText(/Built Python APIs and SQL data pipelines/).waitFor();
+  const downloaded = hr.waitForEvent("download");
+  await hr.getByRole("button", { name: "Download resume", exact: true }).click();
+  assert.equal((await downloaded).suggestedFilename(), "alex-resume.txt");
+  await hr.getByRole("tab", { name: "Match explanation", exact: true }).click();
+  await hr.getByRole("button", { name: "Assess applicant", exact: true }).click();
+  await hr.getByRole("heading", { name: "Match score explanation", exact: true }).waitFor();
+  await shot(hr, "match-desktop");
+  await hr.getByRole("button", { name: "Shortlist", exact: true }).click();
+  await hr.getByLabel("Reason / update shared with the candidate").fill("Strong Python experience. Moving to the technical round.");
+  await hr.getByRole("button", { name: "Confirm decision", exact: true }).click();
+  await hr.getByText("Application status updated", { exact: true }).waitFor();
+  await candidate.goto(`${base}/candidate/applications/${alex.application.id}`);
+  await candidate.getByRole("heading", { name: "Current stage: Shortlisted", exact: true }).waitFor();
+  await hr.getByRole("tab", { name: "Interviews", exact: true }).click();
+  await hr.getByRole("button", { name: "Add interview", exact: true }).click();
+  await hr.getByLabel("Interviewer", { exact: true }).fill("Taylor Reed");
+  await hr.getByLabel("Date and time (your local time)").fill("2030-10-10T14:00");
+  await hr.getByLabel("Interview status", { exact: true }).selectOption("scheduled");
+  await hr.getByLabel("Meeting link or location").fill("https://meet.example.com/platform-interview");
+  const interviewResponse = hr.waitForResponse(r => r.url().endsWith(`/applicants/${alex.application.id}/interviews`) && r.request().method() === "POST");
+  await hr.getByRole("button", { name: "Save interview", exact: true }).click();
+  const interview = await (await interviewResponse).json();
+  assert.ok(interview.id);
+  await hr.goto(`${base}/recruiter/interviews/${interview.id}`);
+  await hr.getByRole("tab", { name: "Interview questions", exact: true }).click();
+  await hr.getByRole("button", { name: "Generate questions", exact: true }).click();
+  await hr.getByRole("heading", { name: "How would you design a reliable Python API?", exact: true }).waitFor();
+  await shot(hr, "questions-desktop");
+  await hr.getByRole("tab", { name: "Feedback", exact: true }).click();
+  for (const label of ["Technical ability (0-10)", "Problem solving (0-10)", "Communication (0-10)", "Role fit (0-10)"]) await hr.getByLabel(label, { exact: true }).fill("8");
+  await hr.getByLabel("Internal feedback and evidence").fill("Private note: strong design with concrete examples of resilience.");
+  await hr.getByLabel("Recommendation", { exact: true }).selectOption("hire");
+  await hr.getByLabel("Feedback shared with the candidate (optional)").fill("Strong discussion of API reliability and testing.");
+  await hr.getByRole("button", { name: "Save feedback", exact: true }).click();
+  await hr.getByText("Interview feedback saved", { exact: true }).waitFor();
+  await hr.getByRole("tab", { name: "Schedule & status", exact: true }).click();
+  await hr.getByLabel("Interview status", { exact: true }).selectOption("completed");
+  await hr.getByRole("button", { name: "Save interview", exact: true }).click();
+  await hr.getByText("Interview saved", { exact: true }).waitFor();
+  await candidate.reload();
+  await candidate.getByText("Strong discussion of API reliability and testing.", { exact: true }).waitFor();
+  assert.equal(await candidate.getByText(/Private note/).count(), 0);
+  await hr.goto(`${base}/recruiter/applicants/${sam.application.id}`);
+  await hr.getByRole("button", { name: "Reject", exact: true }).click();
+  await hr.getByLabel("Reason / update shared with the candidate").fill("We are proceeding with another applicant for this role.");
+  await hr.getByRole("button", { name: "Confirm decision", exact: true }).click();
+  await hr.getByText("Application status updated", { exact: true }).waitFor();
+  await hr.goto(`${base}/recruiter/dashboard`);
+  await hr.getByRole("heading", { name: "Recent applicants", exact: true }).waitFor();
+  await shot(hr, "dashboard-desktop");
+  await hr.goto(`${base}/recruiter/applicants?job=${job.id}`);
+  await hr.getByText("Rank #1 for this job", { exact: true }).waitFor();
+  await shot(hr, "applicants-desktop");
+  await hr.goto(`${base}/recruiter/jobs`);
+  await hr.getByRole("button", { name: "Close Senior Platform Engineer", exact: true }).click();
+  await hr.getByRole("button", { name: "Confirm close", exact: true }).click();
+  await hr.getByText("Job closed to new applications", { exact: true }).waitFor();
+  assert.equal((await hr.request.get(`${api}/api/portal/jobs/${job.id}`)).status(), 404);
+  await hr.goto(base);
+  await hr.getByRole("link", { name: "My workspace", exact: true }).first().waitFor();
+  assert.equal(await hr.getByRole("link", { name: "Login", exact: true }).count(), 0);
+  assert.equal(await hr.getByRole("link", { name: "Register", exact: true }).count(), 0);
+
+  await hr.setViewportSize({ width: 390, height: 844 });
+  for (const [path, heading, name] of [["dashboard", "Recruiter dashboard", "dashboard"], ["jobs", "Jobs", "jobs"], ["applicants", "Applicants", "applicants"], ["interviews", "Interviews", "interviews"], ["company", "Company profile", "company"]]) {
+    await hr.goto(`${base}/recruiter/${path}`);
+    await hr.getByRole("heading", { name: heading, exact: true }).waitFor();
+    await hr.waitForLoadState("networkidle");
+    await shot(hr, `${name}-mobile`);
+  }
+  await hr.goto(`${base}/recruiter/interviews/${interview.id}`);
+  await hr.getByRole("tab", { name: "Feedback", exact: true }).click();
+  assert.equal(await hr.getByLabel("Internal feedback and evidence").inputValue(), "Private note: strong design with concrete examples of resilience.");
+  await shot(hr, "feedback-mobile");
+  await hr.getByRole("button", { name: "Sign out", exact: true }).click();
+  await hr.waitForURL(/\/login/);
+  assert.deepEqual(errors, []);
+  console.log("PASS: recruiter signup, company profile, draft/edit/publish/close job, applicants/rank, resume download, assessment, shortlist/reject, interviews, question generation, private/shared feedback, dashboard and mobile layouts.");
+} finally { await browser.close(); }
