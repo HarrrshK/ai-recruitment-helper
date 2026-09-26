@@ -22,6 +22,9 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="recruiter")  # recruiter | candidate
     candidate_id: Mapped[int | None] = mapped_column(ForeignKey("candidates.id"), default=None)
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), default=None)
+    permissions: Mapped[list | None] = mapped_column(JSON, default=None)
+    disabled: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    token_version: Mapped[int | None] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -34,6 +37,7 @@ class Job(Base):
     description: Mapped[dict | None] = mapped_column(JSON, default=None)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), default=None)
+    creator_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), default=None, index=True)
     revision: Mapped[int | None] = mapped_column(Integer, default=1)
     location: Mapped[str | None] = mapped_column(String(200), default="")
     work_mode: Mapped[str | None] = mapped_column(String(30), default="onsite")
@@ -173,6 +177,8 @@ class AgentRun(Base):
     tokens: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider: Mapped[str | None] = mapped_column(String(40), default=None)
+    estimated_cost: Mapped[float | None] = mapped_column(Float, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -223,6 +229,7 @@ class ApplicationMessage(Base):
     sender_role: Mapped[str] = mapped_column(String(20))
     sender_name: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -237,6 +244,85 @@ class Company(Base):
     about: Mapped[str] = mapped_column(Text, default="")
     contact_email: Mapped[str] = mapped_column(String(200), default="")
     legacy_workspace: Mapped[bool] = mapped_column(Boolean, default=False)
+    knowledge: Mapped[str | None] = mapped_column(Text, default="")
+    active: Mapped[bool | None] = mapped_column(Boolean, default=True)
+
+
+class CompanyInvite(Base):
+    __tablename__ = "company_invites"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+    email: Mapped[str] = mapped_column(String(200))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    permissions: Mapped[list | None] = mapped_column(JSON, default=None)
+
+
+class RuntimeConfig(Base):
+    __tablename__ = "runtime_config"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class PromptVersion(Base):
+    __tablename__ = "prompt_versions"
+    __table_args__ = (UniqueConstraint("name", "base_revision"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), index=True)
+    base_revision: Mapped[int | None] = mapped_column(Integer, default=None)
+    content: Mapped[str] = mapped_column(Text)
+    author_id: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_id: Mapped[int] = mapped_column(Integer)
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    target: Mapped[str] = mapped_column(String(200))
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    signature: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ImpersonationSession(Base):
+    __tablename__ = "impersonation_sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    actor_version: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LLMEvent(Base):
+    __tablename__ = "llm_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent: Mapped[str] = mapped_column(String(100))
+    model: Mapped[str] = mapped_column(String(150))
+    kind: Mapped[str] = mapped_column(String(50), index=True)
+    detail: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DevTask(Base):
+    __tablename__ = "dev_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(30), default="running")
+    result: Mapped[dict | None] = mapped_column(JSON, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class EmbeddingEntry(Base):
+    __tablename__ = "embedding_entries"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model: Mapped[str] = mapped_column(String(150))
+    vector: Mapped[list] = mapped_column(JSON)
 
 
 class HiringInterview(Base):

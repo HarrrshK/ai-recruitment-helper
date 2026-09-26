@@ -1,0 +1,62 @@
+"use client";
+import { useState } from "react";
+import { GitCompareArrows, Play, Save } from "lucide-react";
+import { toast } from "sonner";
+import { useFetch } from "@/lib/use-fetch";
+import { postJson, putJson } from "@/lib/api";
+import type { ModelConfig, Prompt, RoutingConfig, Telemetry } from "@/lib/dev";
+import { dateTime } from "@/lib/dev";
+import { DevHeading, Field, LoadView, selectClass, TableWrap } from "./shared";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+export function LLMStudio() {
+  return <><DevHeading title="LLM operations" label="Models / Prompts / Observability" /><Tabs defaultValue="telemetry"><TabsList className="mb-6 flex h-auto max-w-full flex-wrap justify-start gap-2">{[["telemetry", "Telemetry"], ["models", "Model routing"], ["prompts", "Prompt playground"], ["errors", "Error log"]].map(([key, label]) => <TabsTrigger key={key} value={key}>{label}</TabsTrigger>)}</TabsList><TabsContent value="telemetry"><TelemetryView /></TabsContent><TabsContent value="models"><ModelsView /></TabsContent><TabsContent value="prompts"><PromptsView /></TabsContent><TabsContent value="errors"><ErrorsView /></TabsContent></Tabs></>;
+}
+function TelemetryView() {
+  const [days, setDays] = useState(7);
+  const query = useFetch<Telemetry>(`/api/dev/telemetry?days=${days}`);
+  return <><div className="mb-5 flex justify-end"><select aria-label="Telemetry period" className={selectClass} value={days} onChange={e => setDays(Number(e.target.value))}><option value={1}>Last 24 hours</option><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option></select></div><LoadView {...query}>{data => {
+    const calls = data.agents.reduce((n, a) => n + a.calls, 0), tokens = data.agents.reduce((n, a) => n + a.tokens, 0), cached = data.agents.reduce((n, a) => n + a.cached, 0), cost = data.agents.reduce((n, a) => n + a.cost, 0), unknown = data.agents.reduce((n, a) => n + a.unknown_cost_calls, 0);
+    return <><div className="mb-8 grid grid-cols-2 gap-5 border-y py-6 lg:grid-cols-4">{[["Model calls", calls.toLocaleString()], ["Tokens", tokens.toLocaleString()], ["Estimated cost", `$${cost.toFixed(4)}`], ["Cache hit ratio", `${calls ? Math.round(100 * cached / calls) : 0}%`]].map(([label, value]) => <div key={label}><p className="text-xs text-muted-foreground">{label}</p><p className="mt-2 text-3xl font-semibold tabular-nums">{value}</p></div>)}</div>{unknown > 0 && <p className="mb-6 text-sm text-amber-700 dark:text-amber-300">{unknown} calls have no cost estimate.</p>}<div className="mb-8 grid gap-8 lg:grid-cols-2"><section><h2 className="mb-5 text-lg font-semibold">Daily token usage</h2><div className="flex h-48 items-end gap-2 border-b px-2">{data.daily.length ? data.daily.map((day, i) => <div key={day.date} className="flex h-full min-w-0 flex-1 flex-col justify-end" title={`${day.date}: ${day.tokens} tokens`}><span className="mb-1 truncate text-center text-[10px]">{day.tokens}</span><div className={i % 2 ? "bg-cyan-500" : "bg-emerald-500"} style={{ height: `${Math.max(2, 80 * day.tokens / Math.max(1, ...data.daily.map(d => d.tokens)))}%` }} /><span className="mt-2 truncate text-center text-[10px]">{day.date.slice(5)}</span></div>) : <p className="m-auto text-sm text-muted-foreground">No model calls in this period</p>}</div></section><section><h2 className="mb-5 text-lg font-semibold">Latency distribution</h2><div className="space-y-4">{data.latency.map((bucket, i) => <div key={bucket.label}><div className="mb-1 flex justify-between text-xs"><span>{bucket.label}</span><span>{bucket.count}</span></div><div className="h-5 bg-muted"><div className={["bg-cyan-500", "bg-emerald-500", "bg-amber-500", "bg-rose-500"][i]} style={{ height: "100%", width: `${100 * bucket.count / Math.max(1, ...data.latency.map(b => b.count))}%` }} /></div></div>)}</div></section></div><TableWrap><table><thead><tr>{["Agent", "Calls", "Tokens", "Cache hits", "P95 latency", "Est. cost"].map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{data.agents.map(a => <tr key={a.agent}><td className="font-medium">{a.agent}</td><td>{a.calls}</td><td>{a.tokens.toLocaleString()}</td><td>{a.cached}</td><td>{a.p95_ms} ms</td><td>${a.cost.toFixed(4)}</td></tr>)}</tbody></table></TableWrap></>;
+  }}</LoadView></>;
+}
+function ModelsView() {
+  const query = useFetch<RoutingConfig>("/api/dev/llm/config");
+  return <LoadView {...query}>{config => <ModelForm key={config.revision} initial={config} onSaved={query.reload} />}</LoadView>;
+}
+function ModelForm({ initial, onSaved }: { initial: RoutingConfig; onSaved: () => void }) {
+  const [config, setConfig] = useState(initial), [busy, setBusy] = useState(false);
+  const edit = (key: "primary" | "fallback", change: Partial<ModelConfig>) => setConfig(c => ({ ...c, [key]: { ...c[key], ...change } }));
+  return <form className="max-w-4xl space-y-7" onSubmit={async e => { e.preventDefault(); setBusy(true); try { await putJson("/api/dev/llm/config", config); toast.success("Model routing saved"); onSaved(); } catch (error) { toast.error((error as Error).message); } finally { setBusy(false); } }}>
+    {(["primary", "fallback"] as const).map(key => <section key={key} className="border-t pt-5"><div className="mb-5 flex items-center justify-between"><h2 className="text-lg font-semibold capitalize">{key} models</h2>{key === "fallback" && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!config.fallback} onChange={e => setConfig({ ...config, fallback: e.target.checked ? { provider: "ollama", large_model: "", small_model: "", cost_per_million: 0 } : null })} />Enable fallback</label>}</div>{config[key] && <div className="grid gap-5 sm:grid-cols-2"><Field id={`${key}-provider`} label="Provider"><select id={`${key}-provider`} className={`${selectClass} w-full`} value={config[key]!.provider} onChange={e => edit(key, { provider: e.target.value })}>{["groq", "openai", "anthropic", "ollama"].map(p => <option key={p}>{p}</option>)}</select></Field><Field id={`${key}-rate`} label="Blended cost per million tokens ($)"><Input id={`${key}-rate`} type="number" min={0} max={10000} step="any" placeholder="Not configured" value={config[key]!.cost_per_million ?? ""} onChange={e => edit(key, { cost_per_million: e.target.value ? Number(e.target.value) : null })} /></Field><Field id={`${key}-large`} label="Large model ID"><Input id={`${key}-large`} required value={config[key]!.large_model} onChange={e => edit(key, { large_model: e.target.value })} /></Field><Field id={`${key}-small`} label="Small model ID"><Input id={`${key}-small`} required value={config[key]!.small_model} onChange={e => edit(key, { small_model: e.target.value })} /></Field><p className="text-xs text-muted-foreground">Credential: {config[key]!.provider === "ollama" ? "Local server" : config.providers?.find(p => p.name === config[key]!.provider)?.key_env}</p></div>}</section>)}<Button type="submit" disabled={busy}><Save className="size-4" />{busy ? "Saving..." : "Save model routing"}</Button>
+  </form>;
+}
+function PromptsView() {
+  const [name, setName] = useState("matcher");
+  const list = useFetch<{ name: string; file: string }[]>("/api/dev/prompts");
+  const query = useFetch<Prompt>(`/api/dev/prompts/${name}`);
+  return <><div className="mb-5"><select aria-label="Prompt file" className={selectClass} value={name} onChange={e => setName(e.target.value)}>{list.state.status === "ready" && list.state.data.map(p => <option key={p.name} value={p.name}>{p.file}</option>)}</select></div><LoadView {...query}>{prompt => <PromptEditor key={`${name}:${prompt.revision}`} prompt={prompt} reload={query.reload} />}</LoadView></>;
+}
+function PromptEditor({ prompt, reload }: { prompt: Prompt; reload: () => void }) {
+  const [content, setContent] = useState(prompt.content), [note, setNote] = useState(""), [input, setInput] = useState(""), [compare, setCompare] = useState(0);
+  const [result, setResult] = useState<{ output: string; tokens: number; latency_ms: number; model: string } | null>(null);
+  const [diff, setDiff] = useState<{ left: string; right: string; kind: string }[]>([]), [busy, setBusy] = useState(false);
+  const baseline = prompt.versions.find(v => v.id === compare)?.content ?? prompt.baseline;
+  async function action(kind: "save" | "test" | "diff") {
+    setBusy(true);
+    try {
+      if (kind === "save") { await putJson(`/api/dev/prompts/${prompt.name}`, { content, note, revision: prompt.revision }); toast.success("Prompt version published"); reload(); }
+      else if (kind === "test") setResult(await postJson(`/api/dev/prompts/${prompt.name}/test`, { content, input }));
+      else setDiff(await postJson(`/api/dev/prompts/${prompt.name}/diff`, { left: baseline, right: content }));
+    } catch (error) { toast.error((error as Error).message); } finally { setBusy(false); }
+  }
+  return <div className="space-y-6"><div className="grid gap-5 lg:grid-cols-2"><section><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold">Reference version</h2><select aria-label="Compare version" className={selectClass} value={compare} onChange={e => setCompare(Number(e.target.value))}><option value={0}>Repository baseline</option>{prompt.versions.map(v => <option key={v.id} value={v.id}>v{v.id} / {v.note}</option>)}</select></div><pre className="h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background/60 p-4 text-xs leading-6">{baseline}</pre></section><section><h2 className="mb-5 font-semibold">Working prompt / v{prompt.revision}</h2><Textarea aria-label="System prompt" className="h-80 font-mono text-xs leading-6" value={content} onChange={e => setContent(e.target.value)} maxLength={50000} /></section></div><div className="flex flex-wrap gap-3"><Button variant="outline" disabled={busy} onClick={() => action("diff")}><GitCompareArrows className="size-4" />Compare changes</Button><Input aria-label="Version note" placeholder="Version note" className="min-w-48 flex-1" value={note} onChange={e => setNote(e.target.value)} /><Button disabled={busy || note.trim().length < 3} onClick={() => action("save")}><Save className="size-4" />Publish version</Button></div>{diff.length > 0 && <div className="max-h-80 overflow-auto border text-xs"><div className="grid grid-cols-2 border-b p-2 font-medium"><span>Reference</span><span>Working prompt</span></div>{diff.map((row, i) => <div key={i} className={`grid grid-cols-2 divide-x ${row.kind === "equal" ? "" : "bg-amber-500/10"}`}><pre className="whitespace-pre-wrap break-words p-2">{row.left}</pre><pre className="whitespace-pre-wrap break-words p-2">{row.right}</pre></div>)}</div>}<section className="border-t pt-6"><h2 className="mb-4 text-lg font-semibold">Test input</h2><Textarea aria-label="Test candidate input" rows={5} maxLength={15000} value={input} onChange={e => setInput(e.target.value)} /><Button className="mt-3" disabled={busy || !input.trim()} onClick={() => action("test")}><Play className="size-4" />{busy ? "Working..." : "Run live prompt test"}</Button>{result && <div className="mt-5"><p className="mb-3 text-xs text-muted-foreground">{result.model} / {result.tokens} tokens / {result.latency_ms} ms</p><pre className="whitespace-pre-wrap break-words rounded-md border p-4 text-sm">{result.output}</pre></div>}</section></div>;
+}
+function ErrorsView() {
+  const [kind, setKind] = useState("");
+  const query = useFetch<{ id: number; agent: string; model: string; kind: string; detail: string; created_at: string }[]>(`/api/dev/errors?kind=${kind}`);
+  return <><select aria-label="Error type" value={kind} onChange={e => setKind(e.target.value)} className={`${selectClass} mb-5`}><option value="">All events</option>{["failure", "rate_limit", "retry", "schema"].map(k => <option key={k}>{k}</option>)}</select><LoadView {...query}>{rows => rows.length ? <TableWrap><table><thead><tr>{["Time", "Agent", "Model", "Type", "Detail"].map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map(e => <tr key={e.id}><td>{dateTime(e.created_at)}</td><td>{e.agent}</td><td>{e.model}</td><td className="text-rose-600 dark:text-rose-400">{e.kind}</td><td>{e.detail}</td></tr>)}</tbody></table></TableWrap> : <p className="py-12 text-center text-muted-foreground">No recorded LLM errors</p>}</LoadView></>;
+}

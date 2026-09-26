@@ -19,14 +19,35 @@ export function ApplicationConversation({ applicationId }: { applicationId: numb
   const [sending, setSending] = useState(false);
   const [syncError, setSyncError] = useState("");
   useEffect(() => {
-    let active = true;
+    let active = true, refreshing = false;
     const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try { const data = await apiFetch<ConversationMessage[]>(path); if (active) { update(() => data); setSyncError(""); } }
       catch { if (active) setSyncError("Could not refresh messages. Your draft is saved here; try refreshing."); }
+      finally { refreshing = false; }
     };
-    const timer = setInterval(refresh, 15000);
-    return () => { active = false; clearInterval(timer); };
+    const timer = setInterval(refresh, 3000);
+    window.addEventListener("focus", refresh);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", refresh); };
   }, [path, update]);
+  const lastIncoming = state.status === "ready" ? Math.max(0, ...state.data.filter(message => message.sender_role !== user?.role).map(message => message.id)) : 0;
+  useEffect(() => {
+    if (!lastIncoming) return;
+    let active = true, acknowledged = false, pending = false;
+    const acknowledge = () => {
+      if (acknowledged || pending || document.visibilityState !== "visible" || !document.hasFocus()) return;
+      pending = true;
+      void postJson(`${path}/read`, { through_id: lastIncoming }).then(() => {
+        if (active) { acknowledged = true; window.dispatchEvent(new Event("messages-read")); }
+      }).catch(() => {}).finally(() => { pending = false; });
+    };
+    acknowledge();
+    const timer = setInterval(acknowledge, 5000);
+    window.addEventListener("focus", acknowledge);
+    document.addEventListener("visibilitychange", acknowledge);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", acknowledge); document.removeEventListener("visibilitychange", acknowledge); };
+  }, [path, lastIncoming]);
   async function send(e: React.FormEvent) {
     e.preventDefault(); if (!body.trim()) return; setSending(true);
     try { await postJson(path, { body }); setBody(""); reload(); }

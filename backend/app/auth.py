@@ -4,17 +4,19 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import BACKEND_DIR, get_settings
 from app.db import get_db
-from app.models import Company, User
+from app.models import ImpersonationSession, User
+from app.services.permissions import STAFF_ROLES, permissions_for
+from app.services.signing_key import signing_key
 
 # Secret key for JWT signing
-SECRET_KEY = getattr(get_settings(), "jwt_secret", "hr-recruitment-ai-system-secret-key-2026")
+SECRET_KEY = signing_key(get_settings().jwt_secret, BACKEND_DIR / "data" / ".jwt_secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24 * 7  # 7 days
 
@@ -64,6 +66,7 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
 def get_current_user(
     auth: HTTPAuthorizationCredentials | None = Depends(security_bearer),
     db: Session = Depends(get_db),
+    request: Request = None,
 ) -> User:
     """FastAPI dependency to extract and validate authenticated User."""
     if not auth or not auth.credentials:
@@ -79,7 +82,10 @@ def get_current_user(
             detail="Invalid or expired authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    user_id = int(payload["sub"])
+    try:
+        user_id = int(payload["sub"])
+    except (ValueError, TypeError):
+        raise HTTPException(401, "Invalid authentication token")
     user = db.scalar(select(User).where(User.id == user_id))
     if not user:
         raise HTTPException(
@@ -87,16 +93,31 @@ def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return session_user(user, payload)
+    if user.disabled or payload.get("ver", 0) != (user.token_version or 0):
+        raise HTTPException(401, "Access revoked. Please sign in again.")
+    principal = session_user(user, payload)
+    if payload.get("imp"):
+        session = db.get(ImpersonationSession, payload["imp"])
+        actor = db.get(User, session.actor_id) if session else None
+        if not session or session.revoked or session.user_id != user.id or session.expires_at.replace(tzinfo=UTC) <= datetime.now(UTC) or not actor or actor.disabled or actor.role not in STAFF_ROLES or (actor.token_version or 0) != session.actor_version:
+            raise HTTPException(401, "Impersonation session ended")
+        principal.impersonation_id = session.id
+        principal.actor_id = actor.id
+        if request and request.method not in ("GET", "HEAD", "OPTIONS"):
+            from app.services.audit import record
+            record(db, actor, "impersonation.action_requested", user.id, {"session": session.id, "method": request.method, "path": request.url.path})
+            db.commit()
+    return principal
 
 
 def session_user(user: User, payload: dict[str, Any]) -> User:
     role = payload.get("role", user.role)
-    if role not in ("recruiter", "candidate") or (role == "recruiter" and user.role != "recruiter"):
+    if role not in (*STAFF_ROLES, "recruiter", "candidate") or (role != "candidate" and role != user.role):
         raise HTTPException(status_code=403, detail="Role access denied")
     # A detached principal keeps the session role from changing the account role.
     return User(id=user.id, email=user.email, full_name=user.full_name,
-                role=role, candidate_id=user.candidate_id, company_id=user.company_id)
+                role=role, candidate_id=user.candidate_id, company_id=user.company_id,
+                permissions=user.permissions, disabled=user.disabled, token_version=user.token_version)
 
 
 def get_optional_user(
@@ -106,24 +127,24 @@ def get_optional_user(
     """Optional user dependency returning User or None if unauthenticated."""
     if not auth or not auth.credentials:
         return None
-    payload = decode_access_token(auth.credentials)
-    if not payload or "sub" not in payload:
-        return None
     try:
-        user_id = int(payload["sub"])
-        user = db.scalar(select(User).where(User.id == user_id))
-        return session_user(user, payload) if user else None
-    except Exception:
+        return get_current_user(auth, db)
+    except HTTPException:
         return None
 
 
-def require_recruiter(user: User = Depends(get_current_user)) -> User:
+def require_recruiter(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> User:
     """Require user to have role='recruiter'."""
     if user.role != "recruiter":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Recruiter access required",
         )
+    if user.company_id:
+        from app.models import Company
+        company = db.get(Company, user.company_id)
+        if not company or company.active is False:
+            raise HTTPException(403, "Company workspace is suspended")
     return user
 
 
@@ -138,9 +159,10 @@ def require_candidate(user: User = Depends(get_current_user)) -> User:
 
 
 def require_legacy_recruiter(user: User = Depends(require_recruiter), db: Session = Depends(get_db)) -> User:
-    company = db.get(Company, user.company_id) if user.company_id else None
-    # The old global endpoints cannot safely serve a multi-company installation.
-    other_company = db.scalar(select(Company.id).where(Company.id != user.company_id).limit(1))
-    if not company or not company.legacy_workspace or other_company:
-        raise HTTPException(403, "Use the company-scoped recruiter workspace")
+    raise HTTPException(403, "This shared endpoint is retired. Use your recruiter workspace.")
+
+
+def require_developer(user: User = Depends(get_current_user)) -> User:
+    if user.role not in STAFF_ROLES or getattr(user, "impersonation_id", None):
+        raise HTTPException(403, "Developer access required")
     return user

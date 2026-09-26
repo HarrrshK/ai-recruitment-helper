@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     llm_cache_dir: Path = BACKEND_DIR / "data" / "llm_cache"
     company_info_path: Path = BACKEND_DIR / "data" / "company" / "company_info.md"
     cors_origins: str = "http://localhost:3000"
+    jwt_secret: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

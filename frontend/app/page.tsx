@@ -5,7 +5,7 @@ import { ArrowRight, Briefcase, UserCheck } from "lucide-react";
 
 export default function Home() {
   const { user, isLoading } = useAuth();
-  const workspace = user?.role === "candidate" ? "/candidate/jobs" : "/recruiter/dashboard";
+  const workspace = user?.role === "candidate" ? "/candidate/jobs" : user?.role === "developer" || user?.role === "superadmin" ? "/dev/llm" : "/recruiter/dashboard";
   return <>
     <section className="relative flex min-h-[65vh] items-center overflow-hidden bg-zinc-900 text-white">
       {/* eslint-disable-next-line @next/next/no-img-element */}

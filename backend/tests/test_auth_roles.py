@@ -8,7 +8,8 @@ from app.auth import get_current_user, require_recruiter
 def test_hr_can_use_both_roles_without_changing_account(api, session_factory):
     client, _ = api()
     credentials = {"email": "hr@example.com", "password": "secret123"}
-    assert client.post("/api/auth/register", json={**credentials, "role": "recruiter", "full_name": "HR Person"}).status_code == 200
+    from tests.test_candidate_portal import account
+    account(client, "hr@example.com", "recruiter")
     candidate = client.post("/api/auth/login", json={**credentials, "role": "candidate"})
     assert candidate.status_code == 200
     data = candidate.json()

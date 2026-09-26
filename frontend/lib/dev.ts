@@ -1,0 +1,11 @@
+import type { AuthUser } from "@/lib/auth-context";
+export type DevCompany = { id: number; name: string; industry: string; website: string; location: string; size: string; about: string; contact_email: string; active: boolean; knowledge: string };
+export type DevUser = AuthUser & { disabled: boolean; permissions: string[] };
+export type Invite = { id: number; company_id: number; email: string; expires_at: string; accepted_at: string | null; permissions: string[] };
+export type ModelConfig = { provider: string; large_model: string; small_model: string; cost_per_million: number | null };
+export type RoutingConfig = { primary: ModelConfig; fallback: ModelConfig | null; revision: number; providers?: { name: string; key_env: string }[] };
+export type Prompt = { name: string; baseline: string; content: string; revision: number; versions: { id: number; content: string; note: string; author_id: number; created_at: string }[] };
+export type Telemetry = { agents: { agent: string; calls: number; cached: number; tokens: number; cost: number; unknown_cost_calls: number; p95_ms: number }[]; daily: { date: string; tokens: number; cost: number; calls: number }[]; latency: { label: string; count: number }[]; sample_limit: number };
+export type DevTask = { id: number; kind: string; status: string; created_at: string; result: { checks?: { group: string; name: string; passed: boolean }[]; passed?: number; total?: number; indexed?: number; error?: string; message?: string; mode?: string } | null };
+export const PERMISSIONS = ["jobs.create", "jobs.edit", "applicants.review", "interviews.manage", "messages.send", "company.edit"];
+export const dateTime = (value: string) => new Date(/Z$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).toLocaleString();

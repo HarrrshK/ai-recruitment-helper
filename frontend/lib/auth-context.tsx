@@ -7,8 +7,11 @@ export interface AuthUser {
   id: number;
   email: string;
   full_name: string;
-  role: "recruiter" | "candidate";
+  role: "recruiter" | "candidate" | "developer" | "superadmin";
   candidate_id?: number | null;
+  company_id?: number | null;
+  permissions?: string[];
+  impersonation_id?: string | null;
 }
 
 interface AuthContextType {
@@ -17,6 +20,8 @@ interface AuthContextType {
   isLoading: boolean;
   login: (token: string, user: AuthUser) => void;
   logout: () => void;
+  sessionError: string | null;
+  retrySession: () => void;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -25,63 +30,74 @@ const AuthContext = createContext<AuthContextType>({
   isLoading: true,
   login: () => {},
   logout: () => {},
+  sessionError: null,
+  retrySession: () => {},
 });
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let active = true;
+    // Do not inherit the old, cross-tab persistent identity.
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_user");
     const clear = () => {
-      localStorage.removeItem("auth_token");
-      localStorage.removeItem("auth_user");
+      sessionStorage.removeItem("auth_token");
+      sessionStorage.removeItem("auth_user");
       setUser(null);
       setToken(null);
+      setSessionError(null);
     };
-    window.addEventListener("auth-expired", clear);
+    const expired = (event: Event) => {
+      if ((event as CustomEvent).detail === `Bearer ${sessionStorage.getItem("auth_token")}`) clear();
+    };
+    window.addEventListener("auth-expired", expired);
     async function restore() {
-      const savedToken = localStorage.getItem("auth_token");
-      const savedUser = localStorage.getItem("auth_user");
-      let cached: AuthUser | null = null;
+      const savedToken = sessionStorage.getItem("auth_token");
       try {
-        if (savedToken && savedUser) {
-          cached = JSON.parse(savedUser) as AuthUser;
+        if (savedToken) {
           const current = await apiFetch<AuthUser>("/api/auth/me");
-          if (!active) return;
+          if (!active || savedToken !== sessionStorage.getItem("auth_token")) return;
           setToken(savedToken);
           setUser(current);
-          localStorage.setItem("auth_user", JSON.stringify(current));
+          sessionStorage.setItem("auth_user", JSON.stringify(current));
         }
       } catch (error) {
-        if (!active) return;
-        if (!cached || (error instanceof ApiError && [401, 403].includes(error.status || 0))) clear();
-        else { setToken(savedToken); setUser(cached); }
+        if (!active || savedToken !== sessionStorage.getItem("auth_token")) return;
+        if (error instanceof ApiError && [401, 403].includes(error.status || 0)) clear();
+        else setSessionError("Your session could not be verified. Please retry.");
       } finally {
         if (active) setIsLoading(false);
       }
     }
     void restore();
-    return () => { active = false; window.removeEventListener("auth-expired", clear); };
-  }, []);
+    return () => { active = false; window.removeEventListener("auth-expired", expired); };
+  }, [attempt]);
 
   const login = (newToken: string, newUser: AuthUser) => {
+    setSessionError(null);
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem("auth_token", newToken);
-    localStorage.setItem("auth_user", JSON.stringify(newUser));
+    sessionStorage.setItem("auth_token", newToken);
+    sessionStorage.setItem("auth_user", JSON.stringify(newUser));
   };
 
   const logout = () => {
+    setSessionError(null);
     setToken(null);
     setUser(null);
-    localStorage.removeItem("auth_token");
-    localStorage.removeItem("auth_user");
+    sessionStorage.removeItem("auth_token");
+    sessionStorage.removeItem("auth_user");
+    sessionStorage.removeItem("dev_return_session");
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, logout, sessionError, retrySession: () => { setIsLoading(true); setSessionError(null); setAttempt(a => a + 1); } }}>
       {children}
     </AuthContext.Provider>
   );

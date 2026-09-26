@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from app.auth import create_access_token, get_current_user, hash_password, verify_password
 from app.db import get_db
-from app.models import Candidate, Company, User
+from app.models import Candidate, User
+from app.services.workspaces import consume_invite, invite_permissions
+from app.services.permissions import STAFF_ROLES, permissions_for
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
@@ -17,12 +19,13 @@ class RegisterRequest(BaseModel):
     password: str
     full_name: str = ""
     role: str = "recruiter"  # "recruiter" | "candidate"
+    invite_code: str = ""
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-    role: Literal["recruiter", "candidate"] | None = None
+    role: Literal["recruiter", "candidate", "developer", "superadmin"] | None = None
 
 
 class AuthUserResponse(BaseModel):
@@ -31,6 +34,9 @@ class AuthUserResponse(BaseModel):
     full_name: str
     role: str
     candidate_id: int | None = None
+    company_id: int | None = None
+    permissions: list[str] = []
+    impersonation_id: str | None = None
 
 
 class AuthTokenResponse(BaseModel):
@@ -56,10 +62,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     candidate_id = None
     company_id = None
     if body.role == "recruiter":
-        company = Company(contact_email=body.email.lower().strip())
-        db.add(company)
-        db.flush()
-        company_id = company.id
+        company_id = consume_invite(db, body.invite_code, body.email)
     if body.role == "candidate":
         candidate = Candidate(
             name=body.full_name or body.email.split("@")[0],
@@ -77,6 +80,7 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
         role=body.role,
         candidate_id=candidate_id,
         company_id=company_id,
+        permissions=invite_permissions(db, body.invite_code) if body.role == "recruiter" else None,
     )
     db.add(user)
     db.commit()
@@ -91,6 +95,8 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
             full_name=user.full_name,
             role=user.role,
             candidate_id=user.candidate_id,
+            company_id=user.company_id,
+            permissions=permissions_for(user) if user.role == "recruiter" else [],
         ),
     )
 
@@ -99,10 +105,14 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
 def login(body: LoginRequest, db: Session = Depends(get_db)):
     """Authenticate with email and password."""
     user = db.scalar(select(User).where(User.email == body.email.lower().strip()))
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user or user.disabled or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
     role = body.role or user.role
+    if role in STAFF_ROLES:
+        if user.role not in STAFF_ROLES or (role == "superadmin" and user.role != "superadmin"):
+            raise HTTPException(403, "Developer access required")
+        role = user.role
     if role == "recruiter" and user.role != "recruiter":
         raise HTTPException(status_code=403, detail="This account does not have HR / Company access. Sign in as a candidate.")
     if role == "candidate" and user.candidate_id is None:
@@ -113,7 +123,7 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(user)
 
-    token = create_access_token({"sub": str(user.id), "role": role, "email": user.email})
+    token = create_access_token({"sub": str(user.id), "role": role, "email": user.email, "ver": user.token_version or 0})
     return AuthTokenResponse(
         access_token=token,
         user=AuthUserResponse(
@@ -122,6 +132,8 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
             full_name=user.full_name,
             role=role,
             candidate_id=user.candidate_id,
+            company_id=user.company_id,
+            permissions=permissions_for(user) if role == "recruiter" else [],
         ),
     )
 
@@ -135,4 +147,7 @@ def get_me(user: User = Depends(get_current_user)):
         full_name=user.full_name,
         role=user.role,
         candidate_id=user.candidate_id,
+        company_id=user.company_id,
+        permissions=permissions_for(user) if user.role == "recruiter" else [],
+        impersonation_id=getattr(user, "impersonation_id", None),
     )

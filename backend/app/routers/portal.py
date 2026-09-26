@@ -6,7 +6,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ from app.llm.client import LLMClient, get_llm
 from app.models import Application, ApplicationMessage, Candidate, CandidateProfile, Company, HiringInterview, Job, Match, Resume, User
 from app.services.embeddings import Embedder, get_embedder
 from app.services.resume_text import MAX_BYTES, ResumeFileError, extract_resume_text
+from app.services.workspaces import owned_jobs
+from app.services.permissions import check_permission
 
 router = APIRouter(prefix="/api/portal", tags=["candidate portal"])
 
@@ -28,8 +30,10 @@ def owned_application(db: Session, application_id: int, user: User) -> Applicati
     if not application or (user.role != "recruiter" and application.user_id != user.id):
         raise HTTPException(404, "Application not found")
     if user.role == "recruiter":
+        from app.services.workspaces import company_for
+        company_for(db, user)
         job = db.get(Job, application.job_id)
-        if not job or not user.company_id or job.company_id != user.company_id:
+        if not job or not user.company_id or job.company_id != user.company_id or job.creator_id != user.id:
             raise HTTPException(404, "Application not found")
     return application
 
@@ -66,14 +70,17 @@ def public_job(job: Job, db: Session) -> dict:
 
 @router.get("/jobs")
 def jobs(q: str = "", db: Session = Depends(get_db)):
-    query = select(Job).where(Job.status == "ready").order_by(Job.id.desc())
+    query = select(Job).join(Company, Job.company_id == Company.id).join(User, Job.creator_id == User.id).where(Job.status == "ready", Company.active.is_not(False), User.disabled.is_not(True)).order_by(Job.id.desc())
     return [public_job(job, db) for job in db.scalars(query) if q.lower() in f"{job.title} {job.brief} {job.description}".lower()]
 
 
 @router.get("/jobs/{job_id}")
 def job_details(job_id: int, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
-    if not job or job.status != "ready":
+    if not job or job.status != "ready" or not job.creator_id or not job.company_id:
+        raise HTTPException(404, "This job is not open for applications")
+    company, creator = db.get(Company, job.company_id), db.get(User, job.creator_id)
+    if not company or company.active is False or not creator or creator.disabled:
         raise HTTPException(404, "This job is not open for applications")
     return public_job(job, db)
 
@@ -167,7 +174,10 @@ class ApplyIn(BaseModel):
 @router.post("/applications", status_code=201)
 def apply(body: ApplyIn, user: User = Depends(require_candidate), db: Session = Depends(get_db)):
     job = db.get(Job, body.job_id)
-    if not job or job.status != "ready":
+    if not job or job.status != "ready" or not job.creator_id or not job.company_id:
+        raise HTTPException(409, "This job is no longer accepting applications")
+    company, creator = db.get(Company, job.company_id), db.get(User, job.creator_id)
+    if not company or company.active is False or not creator or creator.disabled:
         raise HTTPException(409, "This job is no longer accepting applications")
     resume = db.get(Resume, body.resume_id)
     if not resume or resume.user_id != user.id or resume.archived:
@@ -210,6 +220,8 @@ def withdraw(application_id: int, user: User = Depends(require_candidate), db: S
 def evaluate(application_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db),
              llm: LLMClient = Depends(get_llm), embedder: Embedder = Depends(get_embedder), force: bool = False):
     application = owned_application(db, application_id, user)
+    if user.role == "recruiter":
+        check_permission(user, "applicants.review")
     if force and user.role != "recruiter":
         raise HTTPException(403, "Only the hiring team can reassess an application")
     if application.assessment and not force:
@@ -268,6 +280,39 @@ class MessageIn(BaseModel):
     body: str = Field(min_length=1, max_length=4000)
 
 
+@router.get("/message-notifications")
+def message_notifications(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    query = select(ApplicationMessage).join(Application, Application.id == ApplicationMessage.application_id).join(Job, Job.id == Application.job_id)
+    if user.role == "candidate":
+        query = query.where(Application.user_id == user.id, ApplicationMessage.sender_role == "recruiter")
+    elif user.role == "recruiter":
+        from app.services.workspaces import company_for
+        company_for(db, user)
+        query = query.where(*owned_jobs(user), ApplicationMessage.sender_role == "candidate")
+    else:
+        raise HTTPException(403, "Candidate or recruiter workspace required")
+    query = query.where(ApplicationMessage.read_at.is_(None))
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = db.execute(query.with_only_columns(ApplicationMessage.id, ApplicationMessage.application_id, ApplicationMessage.sender_name, Application.job_title).order_by(ApplicationMessage.id.desc()).limit(20)).all()
+    return {"unread_count": total, "messages": [dict(row._mapping) for row in rows]}
+
+
+class MessagesReadIn(BaseModel):
+    through_id: int = Field(ge=1)
+
+
+@router.post("/applications/{application_id}/messages/read", status_code=204)
+def read_messages(application_id: int, body: MessagesReadIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    owned_application(db, application_id, user)
+    if user.role not in ("candidate", "recruiter"):
+        raise HTTPException(403, "Candidate or recruiter workspace required")
+    # Acknowledge only messages actually fetched, not arrivals racing with the request.
+    db.execute(update(ApplicationMessage).where(ApplicationMessage.application_id == application_id,
+        ApplicationMessage.id <= body.through_id, ApplicationMessage.sender_role != user.role,
+        ApplicationMessage.read_at.is_(None)).values(read_at=datetime.now(UTC)))
+    db.commit()
+
+
 @router.get("/applications/{application_id}/messages")
 def messages(application_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     owned_application(db, application_id, user)
@@ -278,6 +323,8 @@ def messages(application_id: int, user: User = Depends(get_current_user), db: Se
 @router.post("/applications/{application_id}/messages", status_code=201)
 def send_message(application_id: int, body: MessageIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     owned_application(db, application_id, user)
+    if user.role == "recruiter":
+        check_permission(user, "messages.send")
     if not body.body.strip():
         raise HTTPException(422, "Message cannot be empty")
     message = ApplicationMessage(application_id=application_id, sender_id=user.id, sender_role=user.role,
@@ -289,7 +336,7 @@ def send_message(application_id: int, body: MessageIn, user: User = Depends(get_
 
 @router.get("/hr/applications")
 def hr_applications(user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
-    return [application_out(db, a) for a in db.scalars(select(Application).join(Job, Application.job_id == Job.id).where(Job.company_id == user.company_id).order_by(Application.updated_at.desc()))]
+    return [application_out(db, a) for a in db.scalars(select(Application).join(Job, Application.job_id == Job.id).where(*owned_jobs(user)).order_by(Application.updated_at.desc()))]
 
 
 class StatusIn(BaseModel):
@@ -300,6 +347,7 @@ class StatusIn(BaseModel):
 @router.patch("/hr/applications/{application_id}/status")
 def update_status(application_id: int, body: StatusIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
     application = owned_application(db, application_id, user)
+    check_permission(user, "applicants.review")
     if application.status == "withdrawn":
         raise HTTPException(409, "The candidate withdrew this application")
     if not body.note.strip():

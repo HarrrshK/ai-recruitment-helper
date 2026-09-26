@@ -1,7 +1,6 @@
 """The only place the app talks to an LLM.
 
-Works with any OpenAI-compatible server: Groq by default, or a local Ollama
-by changing LLM_BASE_URL in .env. There is deliberately no fallback provider.
+Provider-specific client used by the runtime routing and fallback layer.
 
 Features: on-disk response cache, retry with backoff on rate limits/5xx,
 JSON output validated against a Pydantic model (with automatic repair
@@ -98,6 +97,8 @@ class LLMClient:
         clock: Callable[[], float] = time.monotonic,
     ):
         self.settings = settings or get_settings()
+        self.provider = self.settings.llm_base_url
+        self.cost_per_million = None
         self._client = client
         self.cache = cache or DiskCache(self.settings.llm_cache_dir)
         self.session_factory = session_factory
@@ -143,6 +144,7 @@ class LLMClient:
             try:
                 return call()
             except _RETRYABLE as exc:
+                self._event("rate_limit" if isinstance(exc, openai.RateLimitError) else "retry", f"{type(exc).__name__}; attempt {attempt}/{attempts}")
                 if attempt == attempts:
                     raise LLMError(f"LLM unavailable after {attempts} attempts: {exc}") from exc
                 delay = self._retry_delay(exc, attempt)
@@ -181,7 +183,7 @@ class LLMClient:
     ) -> dict:
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
         if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+            kwargs["max_completion_tokens" if "api.openai.com" in self.settings.llm_base_url else "max_tokens"] = max_tokens
         # Only Groq's gpt-oss reasoning models take this; other servers may reject unknown params.
         if reasoning_effort and "gpt-oss" in model:
             kwargs["reasoning_effort"] = reasoning_effort
@@ -191,7 +193,7 @@ class LLMClient:
                    max_tokens: int | None, schema: dict | None = None,
                    reasoning_effort: Effort | None = None) -> str:
         return self.cache.key(
-            {"kind": kind, "model": model, "messages": messages, "temperature": temperature,
+            {"kind": kind, "provider": self.settings.llm_base_url, "model": model, "messages": messages, "temperature": temperature,
              "max_tokens": max_tokens, "schema": schema, "effort": reasoning_effort}
         )
 
@@ -199,12 +201,25 @@ class LLMClient:
         """Announce that a real (uncached) call is starting, for the Live Agent Graph."""
         call_id = f"{threading.get_ident()}-{time.perf_counter_ns()}"
         self._calls.current = call_id
+        self._calls.agent, self._calls.model = agent, model
         bus.publish("start", call_id=call_id, agent=agent, model=model)
 
     def _fail(self, agent: str, model: str, exc: Exception) -> None:
+        self._event("failure", type(exc).__name__)
         call_id = getattr(self._calls, "current", None)
         self._calls.current = None
         bus.publish("error", call_id=call_id, agent=agent, model=model, message=str(exc)[:200])
+
+    def _event(self, kind, detail):
+        if self.session_factory is None:
+            return
+        from app.models import LLMEvent
+        try:
+            with self.session_factory() as db:
+                db.add(LLMEvent(agent=getattr(self._calls, "agent", "unknown"), model=getattr(self._calls, "model", ""), kind=kind, detail=detail[:500]))
+                db.commit()
+        except Exception:
+            logger.exception("could not record LLM event")
 
     def _log_run(self, agent: str, model: str, key: str, output: str, tokens: int,
                  latency_ms: int, cached: bool) -> None:
@@ -219,7 +234,8 @@ class LLMClient:
         try:
             with self.session_factory() as session:
                 session.add(AgentRun(agent=agent, model=model, input_hash=key, output=output,
-                                     tokens=tokens, latency_ms=latency_ms, cached=cached))
+                                     tokens=tokens, latency_ms=latency_ms, cached=cached, provider=self.provider,
+                                     estimated_cost=0 if cached else tokens * self.cost_per_million / 1_000_000 if self.cost_per_million is not None and tokens else None))
                 session.commit()
         except Exception:  # logging must never break an LLM call
             logger.exception("could not record AgentRun")
@@ -287,6 +303,7 @@ class LLMClient:
             try:
                 resp = self._with_retries(lambda: self.client.chat.completions.create(**kwargs))
             except LLMJsonRejected as exc:
+                self._event("schema", "Provider rejected JSON; attempting repair")
                 last_error = "the JSON was malformed (unbalanced brackets or quotes)"
                 convo = [*convo,
                          *([{"role": "assistant", "content": exc.failed_generation}] if exc.failed_generation else []),
@@ -302,6 +319,7 @@ class LLMClient:
             try:
                 parsed = schema.model_validate_json(_extract_json(raw))
             except (ValidationError, ValueError) as exc:
+                self._event("schema", f"{schema.__name__} validation failed; attempting repair")
                 last_error = str(exc)
                 convo = [*convo,
                          {"role": "assistant", "content": raw},
@@ -350,12 +368,16 @@ class LLMClient:
             raise
         parts: list[str] = []
         tokens = 0
-        for chunk in response:
-            if getattr(chunk, "usage", None):
-                tokens = chunk.usage.total_tokens
-            if chunk.choices and (delta := chunk.choices[0].delta.content):
-                parts.append(delta)
-                yield delta
+        try:
+            for chunk in response:
+                if getattr(chunk, "usage", None):
+                    tokens = chunk.usage.total_tokens
+                if chunk.choices and (delta := chunk.choices[0].delta.content):
+                    parts.append(delta)
+                    yield delta
+        except openai.OpenAIError as exc:
+            self._fail(agent, model, exc)
+            raise LLMError("Model stream interrupted") from exc
 
         text = "".join(parts)
         if use_cache:
@@ -368,4 +390,5 @@ def get_llm() -> LLMClient:
     """Shared client used by agents and routers."""
     from app.db import SessionLocal
 
-    return LLMClient(session_factory=SessionLocal)
+    from app.llm.runtime import RuntimeLLM
+    return RuntimeLLM(session_factory=SessionLocal)

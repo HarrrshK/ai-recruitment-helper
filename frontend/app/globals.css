@@ -193,3 +193,11 @@
 .react-flow .react-flow__controls .react-flow__controls-button svg path {
   fill: currentColor;
 }
+.dev-workspace { background: #f3f6f5; --primary: #087c62; --primary-foreground: #ffffff; --radius: 8px; }
+.dark .dev-workspace { background: #101515; --primary: #5de0b5; --primary-foreground: #10231c; }
+.dev-glass { background: rgb(255 255 255 / 78%); backdrop-filter: blur(16px); }
+.dark .dev-glass { background: rgb(23 31 30 / 82%); }
+.dev-workspace table { width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px; }
+.dev-workspace th { text-align: left; font-weight: 500; color: var(--muted-foreground); white-space: nowrap; }
+.dev-workspace th, .dev-workspace td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.dev-workspace td { max-width: 400px; overflow-wrap: anywhere; }

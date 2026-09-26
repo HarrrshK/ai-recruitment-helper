@@ -4,13 +4,24 @@ import pytest
 from sqlalchemy import select
 
 from app.agents.resume_parser import ParsedProfile
-from app.models import Application, Candidate, Company, Job
+from app.models import Application, Candidate, Company, Job, User
 
 RESUME = b"Alex Candidate\nPython developer with five years building APIs and SQL data pipelines. Led reliable software delivery."
 
 
-def account(client, email="alex@example.com", role="candidate"):
-    response = client.post("/api/auth/register", json={"email": email, "password": "secret123", "full_name": "Alex", "role": role})
+def account(client, email="alex@example.com", role="candidate", company_name="Acme", company_id=None):
+    code = ""
+    if role == "recruiter":
+        from app.services.workspaces import issue_invite
+        with client.test_session_factory() as db:
+            if company_id is None:
+                company = Company(name=company_name)
+                db.add(company)
+                db.flush()
+                company_id = company.id
+            code = issue_invite(db, company_id, email)
+            db.commit()
+    response = client.post("/api/auth/register", json={"email": email, "password": "secret123", "full_name": "Alex", "role": role, "invite_code": code})
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
@@ -18,7 +29,8 @@ def account(client, email="alex@example.com", role="candidate"):
 def job(session_factory, status="ready", title="Software Engineer"):
     with session_factory() as db:
         company = db.scalar(select(Company).where(Company.legacy_workspace.is_(True)))
-        item = Job(company_id=company.id, title=title, brief="Build Python systems", status=status, description={"markdown": "Build Python systems", "requirements": {"must_have_skills": ["Python"], "nice_to_have_skills": [], "min_years_experience": 2, "responsibilities": []}})
+        owner = db.scalar(select(User).where(User.email == "test-recruiter@example.com"))
+        item = Job(company_id=company.id, creator_id=owner.id, title=title, brief="Build Python systems", status=status, description={"markdown": "Build Python systems", "requirements": {"must_have_skills": ["Python"], "nice_to_have_skills": [], "min_years_experience": 2, "responsibilities": []}})
         db.add(item)
         db.commit()
         return item.id
@@ -86,9 +98,9 @@ def test_application_snapshot_deduplication_and_job_specific_status(api, session
     assert client.delete(f"/api/portal/resumes/{resume}", headers=headers).status_code == 204
     assert client.get("/api/portal/resumes", headers=headers).json() == []
     assert client.get(f"/api/portal/resumes/{resume}/download", headers=headers).content == RESUME
-    assert client.delete(f"/api/jobs/{first_job}").status_code == 409
+    assert client.delete(f"/api/jobs/{first_job}").status_code == 403
     candidate_id = client.get("/api/auth/me", headers=headers).json()["candidate_id"]
-    assert client.delete(f"/api/candidates/{candidate_id}").status_code == 409
+    assert client.delete(f"/api/candidates/{candidate_id}").status_code == 403
     assert client.post(f"/api/portal/applications/{first}/withdraw", headers=headers).status_code == 200
     assert client.patch(f"/api/portal/hr/applications/{first}/status", json={"status": "offer", "note": "Offer"}).status_code == 409
 
@@ -106,6 +118,45 @@ def test_two_way_messages_and_ownership(api, session_factory):
     assert client.get(path, headers=other).status_code == 404
     assert client.post(path, headers=other, json={"body": "intrusion"}).status_code == 404
     assert client.post(path, headers=headers, json={"body": "   "}).status_code == 422
+
+
+def test_message_notifications_are_scoped_persistent_and_race_safe(api, session_factory):
+    client, _ = api()
+    candidate = account(client)
+    stranger = account(client, "stranger@example.com")
+    coworker = account(client, "coworker@example.com", role="recruiter", company_id=client.get("/api/auth/me").json()["company_id"])
+    application = apply(client, candidate, job(session_factory), upload(client, candidate))
+    path = f"/api/portal/applications/{application}/messages"
+    notifications = "/api/portal/message-notifications"
+    sent = client.post(path, headers=candidate, json={"body": "Question for HR"}).json()["id"]
+    assert client.get(notifications, headers=candidate).json()["unread_count"] == 0
+    assert client.get(notifications).json()["unread_count"] == 1
+    assert client.get(notifications, headers=coworker).json()["unread_count"] == 0
+    assert client.get(notifications, headers=stranger).json()["unread_count"] == 0
+    assert client.post(path + "/read", headers=coworker, json={"through_id": sent}).status_code == 404
+    assert client.post(path + "/read", headers=stranger, json={"through_id": sent}).status_code == 404
+    first = client.post(path, json={"body": "First reply"}).json()["id"]
+    second = client.post(path, json={"body": "New arrival"}).json()["id"]
+    assert client.get(notifications, headers=candidate).json()["unread_count"] == 2
+    client.get(path, headers=candidate)
+    assert client.get(notifications, headers=candidate).json()["unread_count"] == 2
+    assert client.post(path + "/read", headers=candidate, json={"through_id": first}).status_code == 204
+    unread = client.get(notifications, headers=candidate).json()
+    assert unread["unread_count"] == 1 and unread["messages"][0]["id"] == second
+    assert client.get(notifications).json()["unread_count"] == 1
+    assert client.post(path + "/read", json={"through_id": second}).status_code == 204
+    assert client.get(notifications).json()["unread_count"] == 0
+    assert client.get(notifications, headers=candidate).json()["unread_count"] == 1
+    assert client.get(notifications, headers={"Authorization": ""}).status_code == 401
+
+
+def test_candidate_cannot_access_any_recruiter_api(api):
+    client, _ = api()
+    candidate = account(client)
+    for path in ("dashboard", "company", "jobs", "jobs/1", "applicants", "applicants/1", "interviews", "interviews/1"):
+        assert client.get(f"/api/recruiter/{path}", headers=candidate).status_code == 403
+    for method, path in (("post", "jobs"), ("put", "jobs/1"), ("post", "jobs/1/close"), ("put", "company")):
+        assert getattr(client, method)(f"/api/recruiter/{path}", headers=candidate, json={}).status_code == 403
 
 
 def test_assessment_uses_submitted_resume_and_keeps_explanations(api, session_factory, monkeypatch):

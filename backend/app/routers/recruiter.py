@@ -17,7 +17,9 @@ from app.llm.client import LLMClient, get_llm
 from app.models import Application, CandidateProfile, HiringInterview, Job, Resume, User
 from app.routers.portal import application_out, change_status, owned_application
 from app.services.anonymizer import anonymize_resume
-from app.services.workspaces import company_for, company_job
+from app.services.workspaces import company_for, company_job, consume_invite, owned_jobs, invite_permissions
+from app.services.permissions import check_permission
+from app.services.audit import record
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"], dependencies=[Depends(require_recruiter)])
 
@@ -52,16 +54,31 @@ def company_out(company):
 
 @router.get("/company")
 def get_company(user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
-    return company_out(company_for(db, user))
+    return company_out(company_for(db, user)) if user.company_id else None
 
 
 @router.put("/company")
 def save_company(body: CompanyIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    check_permission(user, "company.edit")
     company = company_for(db, user)
     for key, value in body.model_dump().items():
         setattr(company, key, value)
+    record(db, user, "company.member_edit", company.id)
     db.commit()
     return company_out(company)
+
+
+class InviteIn(BaseModel):
+    code: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/company/join")
+def join_company(body: InviteIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    account = db.get(User, user.id)
+    account.company_id = consume_invite(db, body.code, account.email, account.company_id)
+    account.permissions = invite_permissions(db, body.code)
+    db.commit()
+    return company_out(company_for(db, account))
 
 
 class JobIn(BaseModel):
@@ -106,6 +123,7 @@ def job_out(db: Session, job: Job):
 
 
 def write_job(db: Session, job: Job, body: JobIn, user: User):
+    check_permission(user, "jobs.edit" if job.id else "jobs.create")
     company = company_for(db, user)
     if body.status == "ready" and (not body.markdown.strip() or not company.name.strip()):
         raise HTTPException(422, "Add a company name and job description before publishing")
@@ -115,6 +133,8 @@ def write_job(db: Session, job: Job, body: JobIn, user: User):
     for key, value in body.model_dump(exclude={"markdown", "requirements"}).items():
         setattr(job, key, value)
     job.company_id = company.id
+    if job.id is None:
+        job.creator_id = user.id
     job.description = description
     db.add(job)
     db.commit()
@@ -124,7 +144,7 @@ def write_job(db: Session, job: Job, body: JobIn, user: User):
 @router.get("/jobs")
 def jobs(user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
     company_for(db, user)
-    return [job_out(db, job) for job in db.scalars(select(Job).where(Job.company_id == user.company_id).order_by(Job.id.desc()))]
+    return [job_out(db, job) for job in db.scalars(select(Job).where(*owned_jobs(user)).order_by(Job.id.desc()))]
 
 
 @router.post("/jobs", status_code=201)
@@ -145,22 +165,29 @@ def edit_job(job_id: int, body: JobIn, user: User = Depends(require_recruiter), 
 @router.post("/jobs/{job_id}/close")
 def close_job(job_id: int, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
     job = company_job(db, job_id, user)
+    check_permission(user, "jobs.edit")
     job.status = "closed"
     db.commit()
     return job_out(db, job)
 
 
 def applicant_rows(db: Session, user: User, job_id: int | None = None):
-    query = select(Application).join(Job, Application.job_id == Job.id).where(Job.company_id == user.company_id)
+    query = select(Application).join(Job, Application.job_id == Job.id).where(*owned_jobs(user))
     if job_id is not None:
         company_job(db, job_id, user)
         query = query.where(Application.job_id == job_id)
     rows = [application_out(db, a) for a in db.scalars(query.order_by(Application.id.desc()))]
+    scores_by_job = {}
     for row in rows:
         score = (row["assessment"] or {}).get("overall_score")
-        eligible = score is not None and not row["assessment_stale"] and row["status"] not in ("withdrawn", "rejected")
-        peers = [r for r in rows if r["job_id"] == row["job_id"] and r["assessment"] and not r["assessment_stale"] and r["status"] not in ("withdrawn", "rejected")]
-        row["rank"] = 1 + sum(r["assessment"]["overall_score"] > score for r in peers) if eligible else None
+        if score is not None and not row["assessment_stale"] and row["status"] not in ("withdrawn", "rejected"):
+            scores_by_job.setdefault(row["job_id"], []).append(score)
+    ranks = {}
+    for job_id, scores in scores_by_job.items():
+        for index, score in enumerate(sorted(scores, reverse=True), start=1):
+            ranks.setdefault((job_id, score), index)
+    for row in rows:
+        row["rank"] = None if row["assessment_stale"] or row["status"] in ("withdrawn", "rejected") else ranks.get((row["job_id"], (row["assessment"] or {}).get("overall_score")))
     return sorted(rows, key=lambda r: (r["rank"] is None, r["rank"] or 0, -r["id"]))
 
 
@@ -222,6 +249,7 @@ def owned_interview(db: Session, interview_id: int, user: User):
 
 
 def write_interview(db: Session, interview: HiringInterview, body: InterviewIn, user: User):
+    check_permission(user, "interviews.manage")
     application = owned_application(db, interview.application_id, user)
     if application.status in ("withdrawn", "rejected", "hired"):
         raise HTTPException(409, "This application is closed")
@@ -247,7 +275,8 @@ def write_interview(db: Session, interview: HiringInterview, body: InterviewIn, 
 
 @router.get("/interviews")
 def interviews(application_id: int | None = None, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
-    query = select(HiringInterview).join(Application, HiringInterview.application_id == Application.id).join(Job, Application.job_id == Job.id).where(Job.company_id == user.company_id)
+    company_for(db, user)
+    query = select(HiringInterview).join(Application, HiringInterview.application_id == Application.id).join(Job, Application.job_id == Job.id).where(*owned_jobs(user))
     if application_id is not None:
         owned_application(db, application_id, user)
         query = query.where(HiringInterview.application_id == application_id)
@@ -272,6 +301,7 @@ def edit_interview(interview_id: int, body: InterviewIn, user: User = Depends(re
 @router.put("/interviews/{interview_id}/feedback")
 def feedback(interview_id: int, body: FeedbackIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
     interview = owned_interview(db, interview_id, user)
+    check_permission(user, "interviews.manage")
     if interview.status == "cancelled":
         raise HTTPException(409, "Cannot record feedback for a cancelled interview")
     if not body.notes.strip():
@@ -286,6 +316,7 @@ def feedback(interview_id: int, body: FeedbackIn, user: User = Depends(require_r
 @router.post("/interviews/{interview_id}/questions")
 def questions(interview_id: int, user: User = Depends(require_recruiter), db: Session = Depends(get_db), llm: LLMClient = Depends(get_llm)):
     interview = owned_interview(db, interview_id, user)
+    check_permission(user, "interviews.manage")
     if interview.questions:
         return interview_out(db, interview)
     if interview.status in ("completed", "cancelled"):
@@ -316,7 +347,7 @@ def questions(interview_id: int, user: User = Depends(require_recruiter), db: Se
 @router.get("/dashboard")
 def dashboard(user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
     company = company_for(db, user)
-    job_rows = list(db.scalars(select(Job).where(Job.company_id == company.id)))
+    job_rows = list(db.scalars(select(Job).where(*owned_jobs(user))))
     applications = applicant_rows(db, user)
     interview_rows = interviews(None, user, db)
     return {"company": company_out(company), "open_jobs": sum(j.status == "ready" for j in job_rows),

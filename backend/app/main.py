@@ -11,17 +11,28 @@ from app.auth import require_legacy_recruiter
 from app.db import get_db, init_db
 from app.llm.client import LLMError
 from app.routers import (
-    agents, auth, ask, candidates, coach, dashboard, evaluation, interviews, jobs, outreach, panel, portal, qa, recruiter, reports, screening,
+    agents, auth, ask, candidates, coach, dashboard, dev, evaluation, interviews, jobs, outreach, panel, portal, qa, recruiter, reports, screening,
 )
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    from app.db import SessionLocal
+    from app.services.dev_tasks import recover_interrupted_tasks
+    recover_interrupted_tasks(SessionLocal)
     yield
 
 
 app = FastAPI(title="AI HR Recruitment System", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def private_api_responses(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 @app.exception_handler(LLMError)
 async def llm_error_handler(_: Request, exc: LLMError) -> JSONResponse:
@@ -31,6 +42,7 @@ async def llm_error_handler(_: Request, exc: LLMError) -> JSONResponse:
 app.include_router(auth.router)
 app.include_router(portal.router)
 app.include_router(recruiter.router)
+app.include_router(dev.router)
 for hr_router in (jobs.router, candidates.router, screening.router, panel.router,
                   interviews.router, qa.router, outreach.router, ask.router, coach.router,
                   agents.router, dashboard.router, evaluation.router, reports.router):

@@ -11,6 +11,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/password-input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
@@ -21,7 +22,7 @@ export default function LoginPage() {
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const [role, setRole] = useState<LoginRole>(params.get("role") === "candidate" ? "candidate" : "recruiter");
+  const [role, setRole] = useState<LoginRole>(params.get("role") === "candidate" ? "candidate" : params.get("role") === "developer" ? "developer" : "recruiter");
   const { login, isLoading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -52,6 +53,8 @@ function LoginForm() {
 
       if (data.user.role === "candidate") {
         router.push("/candidate/jobs");
+      } else if (["developer", "superadmin"].includes(data.user.role)) {
+        router.push("/dev/llm");
       } else {
         router.push("/recruiter/dashboard");
       }
@@ -99,9 +102,9 @@ function LoginForm() {
               </div>
               <div className="relative">
                 <Lock className="absolute left-3 top-3 size-4 text-muted-foreground" />
-                <Input
+                <PasswordInput
                   id="password"
-                  type="password"
+                  autoComplete="current-password"
                   placeholder="••••••••"
                   className="pl-9"
                   value={password}
@@ -115,12 +118,12 @@ function LoginForm() {
             <Button type="submit" className="w-full gap-2 font-medium" disabled={isLoading || authLoading}>
               {isLoading ? "Signing in..." : "Sign In"} <ArrowRight className="size-4" />
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
+            {role !== "developer" && <p className="text-center text-xs text-muted-foreground">
               Don&apos;t have an account?{" "}
               <Link href={`/register?role=${role}`} className="font-semibold text-primary hover:underline">
                 Create Account
               </Link>
-            </p>
+            </p>}
           </CardFooter>
         </form>
       </Card>

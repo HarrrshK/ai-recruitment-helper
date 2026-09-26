@@ -38,7 +38,7 @@ try {
     });
     await page.getByRole("button", { name: "Sign In", exact: true }).click();
     await page.waitForURL("**/candidate/jobs", { waitUntil: "domcontentloaded" }).catch(async error => { await page.screenshot({ path: "/tmp/hr-auth-failure.png" }); console.log(await page.locator("body").innerText()); throw error; });
-    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("auth_user")).role), "candidate");
+    assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("auth_user")).role), "candidate");
     await page.close();
   }
   console.log("Desktop/mobile homepage, role persistence, and candidate login redirect passed.");

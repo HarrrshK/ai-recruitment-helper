@@ -49,9 +49,8 @@ def init_db() -> None:
 
     Base.metadata.create_all(engine)
     _add_missing_columns()
-    from app.services.workspaces import migrate_shared_workspace
-    with SessionLocal() as session:
-        migrate_shared_workspace(session)
+    from app.services.audit import install_guards
+    install_guards(engine)
 
 
 def get_session_factory() -> sessionmaker:

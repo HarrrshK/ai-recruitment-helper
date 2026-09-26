@@ -1,6 +1,7 @@
 """Local text embeddings (MiniLM via ONNX, no PyTorch) and the semantic-fit score built on them."""
 
 import threading
+import hashlib
 from functools import lru_cache
 from typing import Protocol
 
@@ -38,9 +39,35 @@ class FastEmbedder:
                 self._model = TextEmbedding(self.model_name, cache_dir=str(MODEL_DIR))
 
     def embed(self, texts: list[str]) -> np.ndarray:
-        self.ensure_loaded()
-        with self._lock:
-            vectors = np.array(list(self._model.embed(texts)), dtype=np.float32)
+        from sqlalchemy import select
+        from sqlalchemy.exc import SQLAlchemyError
+        from app.db import SessionLocal
+        from app.models import EmbeddingEntry
+        if not texts:
+            return np.empty((0, 384), dtype=np.float32)
+        keys = [hashlib.sha256((self.model_name + t).encode()).hexdigest() for t in texts]
+        cached = {}
+        try:
+            with SessionLocal() as db:
+                cached = {r.key: r.vector for r in db.scalars(select(EmbeddingEntry).where(EmbeddingEntry.key.in_(keys)))}
+        except SQLAlchemyError:
+            pass
+        missing = list(dict.fromkeys(k for k in keys if k not in cached))
+        if missing:
+            self.ensure_loaded()
+            text_by_key = dict(zip(keys, texts))
+            with self._lock:
+                generated = list(self._model.embed([text_by_key[k] for k in missing]))
+            for key, vector in zip(missing, generated):
+                cached[key] = np.asarray(vector).tolist()
+            try:
+                with SessionLocal() as db:
+                    for key in missing:
+                        db.merge(EmbeddingEntry(key=key, model=self.model_name, vector=cached[key]))
+                    db.commit()
+            except SQLAlchemyError:
+                pass  # An unavailable cache must not block matching.
+        vectors = np.array([cached[k] for k in keys], dtype=np.float32)
         return vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
 
 

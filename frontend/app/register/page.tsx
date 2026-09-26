@@ -10,6 +10,7 @@ import { useAuth } from "@/lib/auth-context";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/password-input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 
@@ -23,6 +24,7 @@ function RegisterForm() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
   const [role, setRole] = useState<"recruiter" | "candidate">(params.get("role") === "candidate" ? "candidate" : "recruiter");
   const [isLoading, setIsLoading] = useState(false);
 
@@ -38,7 +40,7 @@ function RegisterForm() {
       const res = await fetch(`${API_URL}/api/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, full_name: fullName, role }),
+        body: JSON.stringify({ email, password, full_name: fullName, role, invite_code: role === "recruiter" ? inviteCode.trim() : "" }),
       });
 
       if (!res.ok) {
@@ -108,6 +110,7 @@ function RegisterForm() {
               </div>
             </div>
 
+            {role === "recruiter" && <div className="space-y-2"><Label htmlFor="invite-code">Company invitation code</Label><Input id="invite-code" required maxLength={200} autoComplete="off" value={inviteCode} onChange={e => setInviteCode(e.target.value)} /></div>}
             <div className="space-y-2">
               <Label htmlFor="fullName">Full Name</Label>
               <div className="relative">
@@ -144,10 +147,10 @@ function RegisterForm() {
               <Label htmlFor="password">Password</Label>
               <div className="relative">
                 <Lock className="absolute left-3 top-3 size-4 text-muted-foreground" />
-                <Input
+                <PasswordInput
                   id="password"
                   minLength={6}
-                  type="password"
+                  autoComplete="new-password"
                   placeholder="At least 6 characters"
                   className="pl-9"
                   value={password}

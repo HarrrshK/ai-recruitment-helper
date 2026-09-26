@@ -1,8 +1,9 @@
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
+import { provisionInvite } from "./browser-invite.mjs";
 
 const base = process.env.TEST_BASE_URL || "http://127.0.0.1:3001";
-const api = process.env.TEST_API_URL || "http://127.0.0.1:8001";
+const api = process.env.TEST_API_URL || "http://127.0.0.1:8002";
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", headless: true, args: ["--no-proxy-server"] });
 const suffix = Date.now();
 const errors = [];
@@ -19,6 +20,19 @@ async function makePage(width = 1440) {
 async function noOverflow(page) { assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `Overflow at ${page.url()}`); }
 
 try {
+  const hr = await makePage();
+  const invitation = provisionInvite(`hr-${suffix}@example.com`);
+  await hr.goto(`${base}/register?role=recruiter`);
+  await hr.getByLabel("Full Name").fill("Taylor - Hiring Team");
+  await hr.getByLabel("Email Address").fill(`hr-${suffix}@example.com`);
+  await hr.getByLabel("Password", { exact: true }).fill("secret123");
+  await hr.getByLabel("Company invitation code", { exact: true }).fill(invitation.code);
+  await hr.getByRole("button", { name: "Create Account", exact: true }).click();
+  await hr.waitForURL("**/recruiter/company");
+  const token = await hr.evaluate(() => sessionStorage.getItem("auth_token"));
+  const title = `Backend Engineer ${suffix}`;
+  const job = await hr.request.post(`${api}/api/recruiter/jobs`, { headers: { Authorization: `Bearer ${token}` }, data: { title, status: "ready", markdown: "Build Python APIs and reliable data services.", requirements: { must_have_skills: ["Python", "SQL"], nice_to_have_skills: [], min_years_experience: 2, responsibilities: ["Build APIs"] } } });
+  assert.equal(job.status(), 201);
   const candidate = await makePage();
   await candidate.goto(`${base}/register?role=candidate`);
   await candidate.getByLabel("Full Name").fill("Alex Morgan");
@@ -40,7 +54,7 @@ try {
   await candidate.getByRole("heading", { name: "Alex-Morgan-Backend.txt" }).waitFor();
   await candidate.getByRole("link", { name: "Find jobs", exact: true }).click();
   await candidate.getByLabel("Title or skill").fill("Backend");
-  await candidate.getByRole("link", { name: "Backend Engineer", exact: true }).click();
+  await candidate.getByRole("link", { name: title, exact: true }).click();
   await candidate.getByLabel("Resume", { exact: true }).selectOption({ label: "Alex-Morgan-Backend.txt" });
   await candidate.getByLabel("Cover letter (optional)").fill("I would love to bring my Python platform experience to this role.");
   await candidate.getByRole("button", { name: "Submit application" }).click();
@@ -55,14 +69,7 @@ try {
   await candidate.getByRole("button", { name: "Send message" }).click();
   await candidate.getByText("What are the next steps for this role?", { exact: true }).waitFor();
 
-  const hr = await makePage();
-  await hr.goto(`${base}/register?role=recruiter`);
-  await hr.getByLabel("Full Name").fill("Taylor - Hiring Team");
-  await hr.getByLabel("Email Address").fill(`hr-${suffix}@example.com`);
-  await hr.getByLabel("Password", { exact: true }).fill("secret123");
-  await hr.getByRole("button", { name: "Create Account", exact: true }).click();
-  await hr.waitForURL("**/dashboard");
-  await hr.goto(`${base}/messages`);
+  await hr.goto(`${base}/recruiter/messages`);
   await hr.getByText("What are the next steps for this role?", { exact: true }).waitFor();
   await hr.getByLabel("Message", { exact: true }).fill("We would like to invite you to a technical interview.");
   await hr.getByRole("button", { name: "Send message" }).click();

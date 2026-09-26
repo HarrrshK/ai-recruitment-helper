@@ -84,7 +84,7 @@ def make_llm(tmp_path, session_factory):
 
 
 @pytest.fixture
-def api(session_factory, make_llm):
+def api(session_factory, make_llm, request):
     """A TestClient wired to an in-memory DB and a scripted fake LLM: `client, fake = api([...])`."""
     from fastapi.testclient import TestClient
 
@@ -118,7 +118,14 @@ def api(session_factory, make_llm):
                 session.add(recruiter)
                 session.commit()
             token = create_access_token({"sub": str(recruiter.id), "role": "recruiter"})
-        return TestClient(app, headers={"Authorization": f"Bearer {token}"}), fake
+        # Retain unit coverage of retired legacy business logic. Current workspace
+        # and authorization tests always exercise the real access dependencies.
+        if request.node.path.name not in {"test_recruiter_workspace.py", "test_recruiter_privacy.py", "test_auth_roles.py", "test_candidate_portal.py", "test_dev_console.py"}:
+            from app.auth import require_legacy_recruiter, require_recruiter
+            app.dependency_overrides[require_legacy_recruiter] = require_recruiter
+        client = TestClient(app, headers={"Authorization": f"Bearer {token}"})
+        client.test_session_factory = session_factory
+        return client, fake
 
     yield build
     app.dependency_overrides.clear()

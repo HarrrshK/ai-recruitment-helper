@@ -11,10 +11,7 @@ JOB = {"title": "Platform Engineer", "brief": "Build Python services", "markdown
 
 
 def recruiter(client, email="hiring@example.com", name="Acme"):
-    headers = account(client, email, "recruiter")
-    response = client.put("/api/recruiter/company", headers=headers, json={"name": name, "industry": "Technology", "website": "https://example.com"})
-    assert response.status_code == 200, response.text
-    return headers
+    return account(client, email, "recruiter", company_name=name)
 
 
 def create_job(client, headers, **changes):
@@ -135,17 +132,19 @@ def test_validation_and_withdrawn_application(api):
     assert client.post(path, headers=hr, json={"title": "Interview"}).status_code == 409
 
 
-def test_legacy_migration_is_idempotent(session_factory):
-    from app.services.workspaces import migrate_shared_workspace
+def test_startup_does_not_guess_legacy_ownership(session_factory, monkeypatch):
+    from app import db as database
+    monkeypatch.setattr(database, "engine", session_factory.kw["bind"])
     with session_factory() as db:
         old_user = User(email="old@example.com", password_hash="test", role="recruiter")
         old_job = Job(title="Old job")
         db.add_all([old_user, old_job])
         db.commit()
-        migrate_shared_workspace(db)
-        migrate_shared_workspace(db)
-        assert old_user.company_id == old_job.company_id
-        assert len(list(db.scalars(select(Company)))) == 1
+        database.init_db()
+        database.init_db()
+        assert old_user.company_id is None and old_job.company_id is None
+        assert old_job.creator_id is None
+        assert len(list(db.scalars(select(Company)))) == 0
 
 
 def test_question_generation_failure_keeps_interview(api, monkeypatch):

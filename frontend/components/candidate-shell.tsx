@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { BriefcaseBusiness, ClipboardList, FileText, LogOut, MessageSquare, UserRound } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { MessageNotifications } from "@/components/message-notifications";
 
 const links = [
   { href: "/candidate/jobs", label: "Find jobs", icon: BriefcaseBusiness },
@@ -19,7 +20,7 @@ export function CandidateShell({ children }: { children: React.ReactNode }) {
     <header className="border-b bg-background">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-5 py-4 md:px-8">
         <Link href="/candidate/jobs" className="flex items-center gap-3 font-semibold"><BriefcaseBusiness className="size-6 text-primary" /> AI Recruiter <span className="hidden border-l pl-3 text-sm font-normal text-muted-foreground sm:inline">Candidate workspace</span></Link>
-        <div className="flex items-center gap-3"><Link href="/candidate/profile" className="max-w-40 truncate text-sm">{user?.full_name || "My profile"}</Link><ThemeToggle /><button onClick={logout} title="Sign out" aria-label="Sign out" className="rounded-md p-2 hover:bg-muted"><LogOut className="size-4" /></button></div>
+        <div className="flex items-center gap-3"><Link href="/candidate/profile" className="max-w-40 truncate text-sm">{user?.full_name || "My profile"}</Link><MessageNotifications key={`${user?.id}:${user?.role}`} /><ThemeToggle /><button onClick={logout} title="Sign out" aria-label="Sign out" className="rounded-md p-2 hover:bg-muted"><LogOut className="size-4" /></button></div>
       </div>
       <nav aria-label="Candidate navigation" className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-3 md:px-6">
         {links.map(({ href, label, icon: Icon }) => <Link key={href} href={href} aria-current={pathname.startsWith(href) ? "page" : undefined} className={`flex shrink-0 items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium ${pathname.startsWith(href) ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}><Icon className="size-4" />{label}</Link>)}

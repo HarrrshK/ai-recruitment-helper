@@ -1,5 +1,6 @@
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
+import { provisionInvite } from "./browser-invite.mjs";
 
 const base = process.env.TEST_BASE_URL || "http://127.0.0.1:3001";
 const api = process.env.TEST_API_URL || "http://127.0.0.1:8002";
@@ -23,22 +24,18 @@ async function shot(p, name) {
 
 try {
   const hr = await page();
+  const invitation = provisionInvite(`hiring-${stamp}@example.com`);
   await hr.goto(`${base}/register?role=recruiter`);
   await hr.getByLabel("Full Name").fill("Taylor Reed");
   await hr.getByLabel("Email Address").fill(`hiring-${stamp}@example.com`);
   await hr.getByLabel("Password", { exact: true }).fill("secret123");
+  await hr.getByLabel("Company invitation code", { exact: true }).fill(invitation.code);
   await hr.getByRole("button", { name: "Create Account", exact: true }).click();
   await hr.waitForURL("**/recruiter/company");
-  await hr.getByLabel("Company name", { exact: true }).fill("Northstar Labs");
-  await hr.getByLabel("Industry", { exact: true }).fill("Developer tools");
-  await hr.getByLabel("Location", { exact: true }).fill("Bengaluru");
-  await hr.getByLabel("Website", { exact: true }).fill("https://example.com");
-  await hr.getByLabel("Company size", { exact: true }).selectOption("51-200");
-  await hr.getByLabel("About the company").fill("We build dependable tools for teams delivering modern software.");
-  await hr.getByRole("button", { name: "Save company profile" }).click();
-  await hr.getByText("Company profile saved", { exact: true }).waitFor();
+  await hr.getByRole("heading", { name: "Northstar Labs", exact: true }).waitFor();
+  assert.equal(await hr.getByRole("button", { name: "Save company profile" }).count(), 0);
   await hr.reload();
-  assert.equal(await hr.getByLabel("Company name", { exact: true }).inputValue(), "Northstar Labs");
+  await hr.getByRole("heading", { name: "Northstar Labs", exact: true }).waitFor();
   await shot(hr, "company-desktop");
   await hr.getByRole("navigation", { name: "Recruiter navigation", exact: true }).getByRole("link", { name: "Jobs", exact: true }).click();
   await hr.getByRole("link", { name: "Create job", exact: true }).click();
@@ -81,8 +78,10 @@ try {
   const sam = await seedCandidate("Sam Patel", "sam");
   const candidate = await page();
   await candidate.goto(base);
-  await candidate.evaluate(session => { localStorage.setItem("auth_token", session.access_token); localStorage.setItem("auth_user", JSON.stringify(session.user)); }, alex.session);
+  await candidate.evaluate(session => { sessionStorage.setItem("auth_token", session.access_token); sessionStorage.setItem("auth_user", JSON.stringify(session.user)); }, alex.session);
   await hr.goto(`${base}/recruiter/applicants?job=${job.id}`);
+  await hr.getByRole("button", { name: "Screen all candidates & rank", exact: true }).click();
+  await hr.getByText("2 assessed, 0 failed", { exact: true }).waitFor();
   await hr.getByRole("link", { name: "Alex Morgan", exact: true }).click();
   await hr.getByRole("tab", { name: "Resume", exact: true }).click();
   await hr.getByText(/Built Python APIs and SQL data pipelines/).waitFor();
@@ -90,7 +89,6 @@ try {
   await hr.getByRole("button", { name: "Download resume", exact: true }).click();
   assert.equal((await downloaded).suggestedFilename(), "alex-resume.txt");
   await hr.getByRole("tab", { name: "Match explanation", exact: true }).click();
-  await hr.getByRole("button", { name: "Assess applicant", exact: true }).click();
   await hr.getByRole("heading", { name: "Match score explanation", exact: true }).waitFor();
   await shot(hr, "match-desktop");
   await hr.getByRole("button", { name: "Shortlist", exact: true }).click();

@@ -1,5 +1,6 @@
 "use client";
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { useFetch } from "@/lib/use-fetch";
 import { patchJson } from "@/lib/api";
@@ -11,8 +12,15 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 export function PortalMessages({ recruiter = false }: { recruiter?: boolean }) {
+  return <Suspense fallback={<LoadingPortal />}><MessagesView recruiter={recruiter} /></Suspense>;
+}
+function MessagesView({ recruiter }: { recruiter: boolean }) {
+  const params = useSearchParams();
+  return <Conversations key={params.get("application") || "default"} recruiter={recruiter} initialApplication={Number(params.get("application")) || null} />;
+}
+function Conversations({ recruiter, initialApplication }: { recruiter: boolean; initialApplication: number | null }) {
   const { state, reload } = useFetch<Application[]>(recruiter ? "/api/portal/hr/applications" : "/api/portal/applications");
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number | null>(initialApplication);
   if (state.status === "loading") return <LoadingPortal />;
   if (state.status === "error") return <ErrorState message={state.message} onRetry={reload} />;
   const application = state.data.find(a => a.id === selected) || state.data[0];
