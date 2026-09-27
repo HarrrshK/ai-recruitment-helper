@@ -1,6 +1,6 @@
 import type { AuthUser } from "@/lib/auth-context";
 export type DevCompany = { id: number; name: string; industry: string; website: string; location: string; size: string; about: string; contact_email: string; active: boolean; knowledge: string };
-export type DevUser = AuthUser & { disabled: boolean; permissions: string[] };
+export type DevUser = AuthUser & { public_id?: string; disabled: boolean; permissions: string[] };
 export type Invite = { id: number; company_id: number; email: string; expires_at: string; accepted_at: string | null; permissions: string[] };
 export type ModelConfig = { provider: string; large_model: string; small_model: string; cost_per_million: number | null };
 export type RoutingConfig = { primary: ModelConfig; fallback: ModelConfig | null; revision: number; providers?: { name: string; key_env: string }[] };

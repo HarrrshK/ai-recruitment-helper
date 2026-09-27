@@ -16,6 +16,7 @@ import { formatDate } from "@/lib/format";
 import type { EmailKind, Match, OutreachMessage } from "@/lib/types";
 import { useFetch } from "@/lib/use-fetch";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 
 const KINDS: { value: EmailKind; label: string; icon: typeof Mail; help: string }[] = [
   { value: "invite", label: "Interview invite", icon: CalendarPlus, help: "Adds a calendar file the candidate can open." },
@@ -256,6 +257,7 @@ function MessageCard({
   const [subject, setSubject] = useState(message.subject);
   const [body, setBody] = useState(message.body);
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const view = shown(message, blind);
   const kind = KINDS.find((k) => k.value === message.kind);
 
@@ -282,6 +284,7 @@ function MessageCard({
     run(async () => {
       await del(`/api/messages/${message.id}`);
       onDeleted(message.id);
+      setConfirmDelete(false);
     });
   const copy = () =>
     run(async () => {
@@ -371,12 +374,13 @@ function MessageCard({
               <Undo2 /> Back to draft
             </Button>
           )}
-          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={remove} disabled={busy} aria-label="Delete this email">
+          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)} disabled={busy} aria-label="Delete this email">
             <Trash2 />
           </Button>
         </div>
       )}
       {blind && !editing && <p className="text-xs text-muted-foreground">Blind mode is on, so the first name and email address are hidden here. Copy still includes them.</p>}
+      <ConfirmDialog open={confirmDelete} onOpenChange={setConfirmDelete} title="Delete this email?" description="This removes the saved draft or message from this candidate’s record." busy={busy} onConfirm={() => void remove()} />
     </article>
   );
 }

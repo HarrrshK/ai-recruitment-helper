@@ -38,7 +38,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
 export function authHeaders(initial?: HeadersInit): Headers {
   const headers = new Headers(initial);
-  const token = typeof window !== "undefined" ? sessionStorage.getItem("auth_token") : null;
+  const token = typeof window !== "undefined" ? sessionStorage.getItem("auth_token") || (localStorage.getItem("auth_remember") === "true" ? localStorage.getItem("auth_token") : null) : null;
   if (token) headers.set("Authorization", `Bearer ${token}`);
   return headers;
 }

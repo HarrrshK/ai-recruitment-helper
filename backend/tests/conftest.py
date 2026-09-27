@@ -117,10 +117,10 @@ def api(session_factory, make_llm, request):
                 recruiter = User(email="test-recruiter@example.com", password_hash="test", full_name="Test recruiter", role="recruiter", company_id=company.id)
                 session.add(recruiter)
                 session.commit()
-            token = create_access_token({"sub": str(recruiter.id), "role": "recruiter"})
+            token = create_access_token({"sub": str(recruiter.id), "role": "recruiter", "sid": recruiter.session_key})
         # Retain unit coverage of retired legacy business logic. Current workspace
         # and authorization tests always exercise the real access dependencies.
-        if request.node.path.name not in {"test_recruiter_workspace.py", "test_recruiter_privacy.py", "test_auth_roles.py", "test_candidate_portal.py", "test_dev_console.py"}:
+        if request.node.path.name not in {"test_recruiter_workspace.py", "test_recruiter_privacy.py", "test_auth_roles.py", "test_candidate_portal.py", "test_dev_console.py", "test_dev_admin.py"}:
             from app.auth import require_legacy_recruiter, require_recruiter
             app.dependency_overrides[require_legacy_recruiter] = require_recruiter
         client = TestClient(app, headers={"Authorization": f"Bearer {token}"})

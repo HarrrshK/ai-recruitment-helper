@@ -29,7 +29,7 @@ function ProfileForm({ initial }: { initial: CandidateProfile }) {
     try {
       const saved = await putJson<CandidateProfile>("/api/portal/profile", { ...profile, skills: skills.split(",").map(s => s.trim()).filter(Boolean) });
       setProfile(saved);
-      if (user && token) login(token, { ...user, full_name: saved.full_name });
+      if (user && token) login(token, { ...user, full_name: saved.full_name }, localStorage.getItem("auth_remember") === "true");
       toast.success("Profile saved");
     } catch (error) { toast.error((error as Error).message); } finally { setSaving(false); }
   }
@@ -40,6 +40,8 @@ function ProfileForm({ initial }: { initial: CandidateProfile }) {
         <div className="space-y-2"><Label htmlFor="profile-email">Account email</Label><Input id="profile-email" value={profile.email} readOnly className="bg-muted" /></div>
       </div></section>
       <section className="space-y-5 border-t pt-6"><h2 className="text-lg font-semibold">Professional background</h2><div className="space-y-2"><Label htmlFor="bio">About you</Label><Textarea id="bio" rows={5} maxLength={3000} value={profile.bio} onChange={e => setProfile({ ...profile, bio: e.target.value })} /></div><div className="space-y-2"><Label htmlFor="skills">Skills (comma separated)</Label><Input id="skills" value={skills} onChange={e => setSkills(e.target.value)} placeholder="Python, SQL, Project management" /></div></section>
+      <section className="space-y-4 border-t pt-6"><div><h2 className="text-lg font-semibold">Profile sharing</h2><p className="mt-1 text-sm text-muted-foreground">Choose which optional profile details hiring teams can see. Your name and the resume you submit with an application remain part of that application.</p></div><div className="grid gap-3 sm:grid-cols-2">{([["email", "Email address"], ["phone", "Phone"], ["headline", "Headline"], ["location", "Location"], ["current_position", "Current position"], ["bio", "About you"], ["skills", "Skills"]] as const).map(([field, label]) => <label key={field} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={profile.visible_fields.includes(field)} onChange={e => setProfile({ ...profile, visible_fields: e.target.checked ? [...new Set([...profile.visible_fields, field])] : profile.visible_fields.filter(value => value !== field) })} />{label}</label>)}</div></section>
+      <p className="border-t pt-5 text-xs text-muted-foreground">Account ID: <span className="font-mono">{profile.public_id}</span></p>
       <Button type="submit" disabled={saving}><Save className="size-4" />{saving ? "Saving..." : "Save profile"}</Button>
     </form></>;
 }

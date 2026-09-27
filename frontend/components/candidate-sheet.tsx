@@ -16,6 +16,7 @@ import { del } from "@/lib/api";
 import { formatMonth } from "@/lib/format";
 import type { Candidate, CandidateDetail } from "@/lib/types";
 import { useFetch } from "@/lib/use-fetch";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 
 export function CandidateSheet({
   candidate,
@@ -39,13 +40,14 @@ function SheetBody({ candidate, onDeleted }: { candidate: Candidate; onDeleted: 
   const profile = candidate.profile;
   const detail = useFetch<CandidateDetail>(`/api/candidates/${candidate.id}`);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   async function remove() {
-    if (!window.confirm(`Delete ${candidate.name}? This cannot be undone.`)) return;
     setDeleting(true);
     try {
       await del(`/api/candidates/${candidate.id}`);
       toast.success(`${candidate.name} deleted`);
+      setConfirmDelete(false);
       onDeleted(candidate.id);
     } catch (err) {
       toast.error((err as Error).message);
@@ -95,11 +97,12 @@ function SheetBody({ candidate, onDeleted }: { candidate: Candidate; onDeleted: 
       </div>
 
       <div className="border-t p-4">
-        <Button variant="destructive" onClick={remove} disabled={deleting}>
+        <Button variant="destructive" onClick={() => setConfirmDelete(true)} disabled={deleting}>
           {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
           Delete candidate
         </Button>
       </div>
+      <ConfirmDialog open={confirmDelete} onOpenChange={setConfirmDelete} title={`Delete ${candidate.name}?`} description="This permanently removes this candidate record and its associated data. This action cannot be undone." busy={deleting} onConfirm={() => void remove()} />
     </>
   );
 }

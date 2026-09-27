@@ -15,7 +15,7 @@ def staff(client, role="superadmin", email="admin@example.com"):
         user = User(email=email, full_name="Test administrator", password_hash=hash_password("secret123"), role=role)
         db.add(user)
         db.commit()
-        return {"Authorization": f"Bearer {create_access_token({'sub': str(user.id), 'role': role})}"}, user.id
+        return {"Authorization": f"Bearer {create_access_token({'sub': str(user.id), 'role': role, 'sid': user.session_key})}"}, user.id
 
 
 def test_interrupted_maintenance_can_be_retried(api):

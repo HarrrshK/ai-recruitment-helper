@@ -11,7 +11,7 @@ export function SiteShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, isLoading, logout, sessionError, retrySession } = useAuth();
-  const publicPage = ["/", "/login", "/register", "/careers"].includes(pathname) || pathname.startsWith("/careers/");
+  const publicPage = ["/", "/login", "/register", "/forgot-password", "/reset-password", "/careers"].includes(pathname) || pathname.startsWith("/careers/");
   const candidatePage = pathname === "/candidate" || pathname.startsWith("/candidate/") || pathname === "/apply" || pathname.startsWith("/apply/");
   const recruiterPage = pathname === "/recruiter" || pathname.startsWith("/recruiter/");
   const developer = user?.role === "developer" || user?.role === "superadmin";

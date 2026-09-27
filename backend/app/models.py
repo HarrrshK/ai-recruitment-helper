@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+import secrets
+from uuid import uuid4
 
 from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Integer, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -16,6 +18,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    public_id: Mapped[str] = mapped_column(String(36), unique=True, index=True, default=lambda: str(uuid4()))
     email: Mapped[str] = mapped_column(String(200), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     full_name: Mapped[str] = mapped_column(String(200), default="")
@@ -25,6 +28,7 @@ class User(Base):
     permissions: Mapped[list | None] = mapped_column(JSON, default=None)
     disabled: Mapped[bool | None] = mapped_column(Boolean, default=False)
     token_version: Mapped[int | None] = mapped_column(Integer, default=0)
+    session_key: Mapped[str | None] = mapped_column(String(64), default=lambda: secrets.token_hex(24))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -191,6 +195,17 @@ class CandidateProfile(Base):
     current_position: Mapped[str] = mapped_column(String(200), default="")
     bio: Mapped[str] = mapped_column(Text, default="")
     skills: Mapped[list] = mapped_column(JSON, default=list)
+    visible_fields: Mapped[list] = mapped_column(JSON, default=lambda: ["headline", "location", "current_position", "bio", "skills"])
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class Resume(Base):

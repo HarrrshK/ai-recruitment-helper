@@ -13,6 +13,8 @@ from app.llm.client import LLMError
 from app.routers import (
     agents, auth, ask, candidates, coach, dashboard, dev, evaluation, interviews, jobs, outreach, panel, portal, qa, recruiter, reports, screening,
 )
+from app.routers import dev_admin
+from app.services import admin_operations
 
 
 @asynccontextmanager
@@ -21,6 +23,10 @@ async def lifespan(_: FastAPI):
     from app.db import SessionLocal
     from app.services.dev_tasks import recover_interrupted_tasks
     recover_interrupted_tasks(SessionLocal)
+    from app.models import RuntimeConfig
+    with SessionLocal() as db:
+        setting = db.get(RuntimeConfig, "maintenance")
+        admin_operations.maintenance = bool(setting and setting.value.get("enabled"))
     yield
 
 
@@ -29,7 +35,14 @@ app = FastAPI(title="AI HR Recruitment System", lifespan=lifespan)
 
 @app.middleware("http")
 async def private_api_responses(request: Request, call_next):
-    response = await call_next(request)
+    admitted = admin_operations.enter(request.url.path)
+    if admitted is None:
+        return JSONResponse(status_code=503, content={"detail": "Workspace maintenance is in progress. Please try again shortly."}, headers={"Retry-After": "30", "Cache-Control": "no-store"})
+    try:
+        response = await call_next(request)
+    finally:
+        if admitted:
+            admin_operations.leave()
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
     return response
@@ -43,6 +56,7 @@ app.include_router(auth.router)
 app.include_router(portal.router)
 app.include_router(recruiter.router)
 app.include_router(dev.router)
+app.include_router(dev_admin.router)
 for hr_router in (jobs.router, candidates.router, screening.router, panel.router,
                   interviews.router, qa.router, outreach.router, ask.router, coach.router,
                   agents.router, dashboard.router, evaluation.router, reports.router):

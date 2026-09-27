@@ -44,6 +44,7 @@ def application_out(db: Session, application: Application) -> dict:
     job = db.get(Job, application.job_id)
     company = db.get(Company, job.company_id) if job and job.company_id else None
     return {"id": application.id, "job_id": application.job_id, "job_title": application.job_title,
+            "candidate_public_id": owner.public_id,
             "candidate_name": owner.full_name, "status": application.status,
             "resume_name": resume.filename, "resume_id": resume.id,
             "cover_letter": application.cover_letter, "history": application.history,
@@ -93,12 +94,15 @@ class ProfileIn(BaseModel):
     current_position: str = Field(default="", max_length=200)
     bio: str = Field(default="", max_length=3000)
     skills: list[str] = Field(default_factory=list, max_length=40)
+    visible_fields: list[Literal["headline", "phone", "location", "current_position", "bio", "skills", "email"]] = Field(default_factory=list)
 
 
 @router.get("/profile")
 def profile(user: User = Depends(require_candidate), db: Session = Depends(get_db)):
     saved = db.get(CandidateProfile, user.id)
     result = {"full_name": user.full_name, "email": user.email}
+    result["public_id"] = user.public_id
+    result["visible_fields"] = saved.visible_fields if saved and saved.visible_fields is not None else ["headline", "location", "current_position", "bio", "skills"]
     for field in ("headline", "phone", "location", "current_position", "bio", "skills"):
         result[field] = getattr(saved, field) if saved else ([] if field == "skills" else "")
     return result
@@ -199,6 +203,52 @@ def apply(body: ApplyIn, user: User = Depends(require_candidate), db: Session = 
 @router.get("/applications")
 def applications(user: User = Depends(require_candidate), db: Session = Depends(get_db)):
     return [application_out(db, a) for a in db.scalars(select(Application).where(Application.user_id == user.id).order_by(Application.id.desc()))]
+
+
+@router.get("/applications/{application_id}/cohort")
+def application_cohort(application_id: int, user: User = Depends(require_candidate), db: Session = Depends(get_db)):
+    """Return only the signed-in candidate's rank and anonymous cohort size."""
+    application = owned_application(db, application_id, user)
+    assessment = application.assessment or {}
+    job = db.get(Job, application.job_id)
+    if not job or assessment.get("overall_score") is None or assessment.get("job_revision", 1) != (job.revision or 1):
+        return {"rank": None, "assessed_count": 0, "note": "A current assessment is needed before ranking is available."}
+    rows = db.scalars(select(Application).where(Application.job_id == job.id, Application.status.not_in(("withdrawn", "rejected"))))
+    scores = [float((row.assessment or {}).get("overall_score")) for row in rows
+              if row.assessment and row.assessment.get("overall_score") is not None
+              and row.assessment.get("job_revision", 1) == (job.revision or 1)]
+    own_score = float(assessment["overall_score"])
+    ahead = sum(score > own_score for score in scores)
+    return {"rank": ahead + 1, "assessed_count": len(scores),
+            "top_percent": round((ahead + 1) / len(scores) * 100) if scores else None,
+            "note": "Other applicants’ names, profiles, and scores are never shown."}
+
+
+@router.post("/resume-screen")
+def screen_resume(resume_id: int, user: User = Depends(require_candidate), db: Session = Depends(get_db), llm: LLMClient = Depends(get_llm)):
+    resume = db.get(Resume, resume_id)
+    if not resume or resume.user_id != user.id or resume.archived:
+        raise HTTPException(404, "Resume not found")
+    profile = parse_resume(resume.text, llm)
+    skills = {skill.casefold() for skill in profile.skills}
+    results = []
+    public_jobs = jobs(db=db)
+    for item in public_jobs:
+        requirements = item.get("requirements") or {}
+        must = list(requirements.get("must_have_skills") or [])
+        nice = list(requirements.get("nice_to_have_skills") or [])
+        if not must and not nice:
+            continue
+        norm = lambda value: str(value).strip().casefold()
+        matched_must = [skill for skill in must if norm(skill) in skills]
+        missing_must = [skill for skill in must if norm(skill) not in skills]
+        matched_nice = [skill for skill in nice if norm(skill) in skills]
+        score = round((len(matched_must) * 2 + len(matched_nice)) / max(1, len(must) * 2 + len(nice)) * 100)
+        results.append({"job": item, "fit_score": score, "matched_must": matched_must,
+                        "missing_must": missing_must, "matched_nice": matched_nice,
+                        "min_years": int(requirements.get("min_years_experience") or 0),
+                        "candidate_years": round(profile.total_years_experience, 1)})
+    return sorted(results, key=lambda row: row["fit_score"], reverse=True)
 
 
 @router.get("/applications/{application_id}")

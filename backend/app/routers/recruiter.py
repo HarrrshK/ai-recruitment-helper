@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.interviewer import generate_questions
-from app.agents.jd_generator import JobRequirements
+from app.agents.jd_generator import JobRequirements, extract_requirements, stream_jd
 from app.agents.resume_parser import parse_resume
 from app.auth import require_recruiter
 from app.db import get_db
@@ -203,8 +203,26 @@ def applicant(application_id: int, user: User = Depends(require_recruiter), db: 
     account = db.get(User, application.user_id)
     profile = db.get(CandidateProfile, account.id)
     resume = db.get(Resume, application.resume_id)
-    return {**application_out(db, application), "email": account.email, "resume_text": resume.text,
-            "profile": {key: getattr(profile, key) if profile else ([] if key == "skills" else "") for key in ("headline", "phone", "location", "current_position", "bio", "skills")}}
+    visible = set(profile.visible_fields if profile and profile.visible_fields is not None else ["headline", "location", "current_position", "bio", "skills"])
+    return {**application_out(db, application), "email": account.email if "email" in visible else "", "resume_text": resume.text,
+            "profile": {key: (getattr(profile, key) if profile else ([] if key == "skills" else "")) if key in visible else ([] if key == "skills" else "") for key in ("headline", "phone", "location", "current_position", "bio", "skills")},
+            "candidate_public_id": account.public_id, "visible_fields": sorted(visible)}
+
+
+class GenerateJobIn(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    brief: str = Field(default="", max_length=3000)
+
+
+@router.post("/jobs/generate")
+def generate_job(body: GenerateJobIn, user: User = Depends(require_recruiter), llm: LLMClient = Depends(get_llm)):
+    if "jobs.create" not in (user.permissions or []) and "jobs.edit" not in (user.permissions or []):
+        check_permission(user, "jobs.create")
+    markdown = "".join(stream_jd(body.title, body.brief, llm)).strip()
+    if not markdown:
+        raise HTTPException(502, "The job description generator returned no content")
+    requirements = extract_requirements(markdown, llm)
+    return {"markdown": markdown, "requirements": requirements.model_dump()}
 
 
 @router.get("/applicants/{application_id}/resume")

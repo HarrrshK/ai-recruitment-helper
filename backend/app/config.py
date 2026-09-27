@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     company_info_path: Path = BACKEND_DIR / "data" / "company" / "company_info.md"
     cors_origins: str = "http://localhost:3000"
     jwt_secret: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_use_tls: bool = True
+    frontend_base_url: str = "http://localhost:3000"
 
     @property
     def cors_origin_list(self) -> list[str]:

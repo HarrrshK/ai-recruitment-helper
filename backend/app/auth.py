@@ -93,7 +93,7 @@ def get_current_user(
             detail="User not found",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if user.disabled or payload.get("ver", 0) != (user.token_version or 0):
+    if user.disabled or payload.get("ver", 0) != (user.token_version or 0) or payload.get("sid") != user.session_key:
         raise HTTPException(401, "Access revoked. Please sign in again.")
     principal = session_user(user, payload)
     if payload.get("imp"):
@@ -117,7 +117,7 @@ def session_user(user: User, payload: dict[str, Any]) -> User:
     # A detached principal keeps the session role from changing the account role.
     return User(id=user.id, email=user.email, full_name=user.full_name,
                 role=role, candidate_id=user.candidate_id, company_id=user.company_id,
-                permissions=user.permissions, disabled=user.disabled, token_version=user.token_version)
+                permissions=user.permissions, disabled=user.disabled, token_version=user.token_version, session_key=user.session_key)
 
 
 def get_optional_user(

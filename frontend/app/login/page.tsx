@@ -26,6 +26,7 @@ function LoginForm() {
   const { login, isLoading: authLoading } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -40,7 +41,7 @@ function LoginForm() {
       const res = await fetch(`${API_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, role }),
+        body: JSON.stringify({ email, password, role, remember_me: rememberMe }),
       });
 
       if (!res.ok) {
@@ -48,7 +49,7 @@ function LoginForm() {
       }
       const data = await res.json();
 
-      login(data.access_token, data.user);
+      login(data.access_token, data.user, rememberMe);
       toast.success(`Welcome back, ${data.user.full_name || data.user.email}!`);
 
       if (data.user.role === "candidate") {
@@ -94,6 +95,10 @@ function LoginForm() {
                   required
                 />
               </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+              <label className="flex items-center gap-2"><input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)} />Keep me signed in for 30 days</label>
+              <Link href="/forgot-password" className="text-primary hover:underline">Forgot password?</Link>
             </div>
 
             <div className="space-y-2">

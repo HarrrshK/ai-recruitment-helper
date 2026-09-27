@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { ArrowLeft, ArrowRight, BriefcaseBusiness, Search } from "lucide-react";
+import { ArrowLeft, ArrowRight, BriefcaseBusiness, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
@@ -21,12 +21,26 @@ import { LoadingPortal, PortalHeading } from "@/components/portal-shared";
 export function CandidateJobs() {
   const { state, reload } = useFetch<Job[]>("/api/portal/jobs");
   const { user } = useAuth();
+  const resumes = useFetch<Resume[]>(user?.role === "candidate" ? "/api/portal/resumes" : "");
+  const [resumeId, setResumeId] = useState("");
+  const [screening, setScreening] = useState(false);
+  const [fitResults, setFitResults] = useState<FitResult[] | null>(null);
+  const [fitOrder, setFitOrder] = useState("best");
   const [search, setSearch] = useState("");
   const [experience, setExperience] = useState("all");
   const [sort, setSort] = useState("newest");
   const base = user?.role === "candidate" ? "/candidate/jobs" : "/careers";
   const jobs = state.status === "ready" ? state.data.filter(job => `${job.title} ${job.brief} ${job.requirements?.must_have_skills.join(" ") || ""}`.toLowerCase().includes(search.toLowerCase()) && (experience === "all" || (job.requirements?.min_years_experience ?? 0) <= Number(experience))).sort((a, b) => sort === "title" ? a.title.localeCompare(b.title) : b.id - a.id) : [];
+  async function screenResume() {
+    if (!resumeId) return;
+    setScreening(true);
+    try { const result = await postJson<FitResult[]>(`/api/portal/resume-screen?resume_id=${resumeId}`); setFitResults(result); }
+    catch (error) { toast.error((error as Error).message); }
+    finally { setScreening(false); }
+  }
+  const rankedFits = fitResults ? [...fitResults].sort((a, b) => fitOrder === "best" ? b.fit_score - a.fit_score : a.fit_score - b.fit_score) : [];
   return <><PortalHeading title="Find your next role" description="Open opportunities, ready for your next step." />
+    {user?.role === "candidate" && <section className="mb-7 border-y py-5"><div className="flex flex-wrap items-end gap-3"><div className="max-w-md flex-1 space-y-2"><h2 className="font-semibold">Screen your resume</h2><p className="text-sm text-muted-foreground">Compare your resume skills with published job requirements. This transparent estimate is not a hiring score.</p><Label htmlFor="screen-resume">Resume</Label><select id="screen-resume" value={resumeId} onChange={e => setResumeId(e.target.value)} className="h-9 w-full rounded-md border bg-background px-3 text-sm"><option value="">Choose a resume</option>{resumes.state.status === "ready" && resumes.state.data.map(resume => <option key={resume.id} value={resume.id}>{resume.filename}</option>)}</select>{resumes.state.status === "ready" && resumes.state.data.length === 0 && <p className="text-xs text-muted-foreground"><Link href="/candidate/resumes" className="text-primary hover:underline">Upload a resume</Link> to compare job fit.</p>}</div><Button onClick={screenResume} disabled={!resumeId || screening}><Sparkles className="size-4" />{screening ? "Screening..." : "Compare with open jobs"}</Button></div>{fitResults && <div className="mt-6"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-muted-foreground">{fitResults.length} roles with structured skill requirements</p><label className="flex items-center gap-2 text-sm">Order<select className="h-8 rounded-md border bg-background px-2" value={fitOrder} onChange={e => setFitOrder(e.target.value)}><option value="best">Best skill fit</option><option value="gaps">Most skill gaps</option></select></label></div><div className="divide-y border-t">{rankedFits.map(row => <article key={row.job.id} className="py-4"><div className="flex flex-wrap items-center justify-between gap-3"><Link href={`${base}/${row.job.id}`} className="font-semibold hover:text-primary">{row.job.title}</Link><span className="text-sm font-medium tabular-nums">{row.fit_score}% skills match</span></div><p className="mt-2 text-xs text-muted-foreground">{row.matched_must.length} required and {row.matched_nice.length} preferred skills found · Resume experience {row.candidate_years} years · Role minimum {row.min_years} years</p>{row.missing_must.length > 0 && <p className="mt-2 text-sm">Potential gaps: {row.missing_must.join(", ")}</p>}</article>)}{!rankedFits.length && <p className="py-5 text-sm text-muted-foreground">No open jobs have structured skills to compare yet.</p>}</div></div>}</section>}
     <div className="mb-6 flex flex-wrap items-end gap-3 border-y py-5">
       <div className="min-w-48 flex-1 space-y-2"><Label htmlFor="job-search">Title or skill</Label><div className="relative"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" /><Input id="job-search" placeholder="Search jobs" value={search} onChange={e => setSearch(e.target.value)} className="pl-9" /></div></div>
       <div className="space-y-2"><Label htmlFor="experience-filter">Experience</Label><select id="experience-filter" value={experience} onChange={e => setExperience(e.target.value)} className="h-8 rounded-md border bg-background px-3 text-sm"><option value="all">Any experience</option><option value="0">Entry level</option><option value="2">Up to 2 years</option><option value="5">Up to 5 years</option></select></div>
@@ -35,6 +49,8 @@ export function CandidateJobs() {
     {state.status === "loading" ? <LoadingPortal /> : state.status === "error" ? <ErrorState message={state.message} onRetry={reload} /> : <><p className="mb-4 text-sm text-muted-foreground">{jobs.length} open {jobs.length === 1 ? "role" : "roles"}</p>{!jobs.length ? <div className="py-16 text-center"><BriefcaseBusiness className="mx-auto mb-4 size-8 text-muted-foreground" /><h2 className="font-semibold">No matching jobs</h2><p className="mt-2 text-sm text-muted-foreground">Try a different search or check back for new openings.</p></div> : <div className="divide-y border-t">{jobs.map(job => <article key={job.id} className="grid gap-4 py-6 sm:grid-cols-[1fr_auto]"><div className="min-w-0"><Link href={`${base}/${job.id}`} className="text-xl font-semibold hover:text-primary">{job.title}</Link><p className="mt-2 line-clamp-2 max-w-3xl text-sm leading-6 text-muted-foreground">{job.brief}</p><div className="mt-4 flex flex-wrap gap-2">{job.requirements?.must_have_skills.slice(0, 5).map(skill => <span key={skill} className="rounded border px-2 py-1 text-xs">{skill}</span>)}</div><p className="mt-3 text-xs text-muted-foreground">{job.requirements ? `${job.requirements.min_years_experience}+ years experience · ` : ""}Posted {dateLabel(job.created_at)}</p></div><Link href={`${base}/${job.id}`} className={`${buttonVariants({ variant: "outline" })} self-start`}>View job <ArrowRight className="size-4" /></Link></article>)}</div>}</>}
   </>;
 }
+
+type FitResult = { job: Job; fit_score: number; matched_must: string[]; missing_must: string[]; matched_nice: string[]; min_years: number; candidate_years: number };
 
 export function CandidateJobDetail({ jobId }: { jobId: string }) {
   const { state, reload } = useFetch<Job>(`/api/portal/jobs/${jobId}`);

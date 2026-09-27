@@ -7,7 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from pydantic import BaseModel, EmailStr, Field, field_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/dev", tags=["developer"], dependencies=[Depends(
 
 
 def user_out(user):
-    return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role,
+    return {"id": user.id, "public_id": user.public_id, "email": user.email, "full_name": user.full_name, "role": user.role,
             "company_id": user.company_id, "candidate_id": user.candidate_id, "disabled": bool(user.disabled), "permissions": permissions_for(user) if user.role == "recruiter" else []}
 
 
@@ -142,8 +142,13 @@ def revoke_invite(invite_id: int, user: User = Depends(require_developer), db: S
 
 
 @router.get("/users")
-def users(q: str = "", offset: int = Query(0, ge=0), user: User = Depends(require_developer), db: Session = Depends(get_db)):
-    query = select(User).where(User.email.ilike(f"%{q[:100]}%"))
+def users(q: str = "", offset: int = Query(0, ge=0), role: Literal["candidate", "recruiter", "developer", "superadmin"] | None = None,
+          disabled: bool | None = None, user: User = Depends(require_developer), db: Session = Depends(get_db)):
+    query = select(User).where(or_(User.email.ilike(f"%{q[:100]}%"), User.full_name.ilike(f"%{q[:100]}%"), User.public_id.ilike(f"%{q[:100]}%")))
+    if role:
+        query = query.where(User.role == role)
+    if disabled is not None:
+        query = query.where(User.disabled.is_(True) if disabled else or_(User.disabled.is_(False), User.disabled.is_(None)))
     record(db, user, "users.inspect", "users", {"offset": offset})
     rows = list(db.scalars(query.order_by(User.id.desc()).offset(offset).limit(100)))
     db.commit()
@@ -199,7 +204,7 @@ def impersonate(user_id: int, body: ImpersonateBody, user: User = Depends(requir
     db.add(session)
     record(db, user, "impersonation.start", target.id, {"session": session.id, "role": body.role, "reason": body.reason})
     db.commit()
-    token = create_access_token({"sub": str(target.id), "role": body.role, "ver": target.token_version or 0, "imp": session.id}, timedelta(minutes=15))
+    token = create_access_token({"sub": str(target.id), "role": body.role, "ver": target.token_version or 0, "sid": target.session_key, "imp": session.id}, timedelta(minutes=15))
     return {"access_token": token, "user": {**user_out(target), "role": body.role, "candidate_id": target.candidate_id, "impersonation_id": session.id}}
 
 
@@ -367,7 +372,7 @@ def inspect_table(name: str, offset: int = Query(0, ge=0, le=100000), user: User
     table = Base.metadata.tables.get(name)
     if table is None:
         raise HTTPException(404, "Table not found")
-    hidden = {"password_hash", "token_hash", "signature", "vector"}
+    hidden = {"password_hash", "token_hash", "signature", "vector", "session_key"}
     columns = [c for c in table.columns if c.name not in hidden]
     rows = db.execute(select(*columns).order_by(*table.primary_key.columns).offset(offset).limit(50)).mappings()
     def value(v):

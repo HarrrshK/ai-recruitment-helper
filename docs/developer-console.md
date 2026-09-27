@@ -21,6 +21,60 @@ is blocked to prevent accidental lockout.
 
 ## Companies And Access
 
+### Account Administration
+
+`/dev/users` supports creation, name/email edits, role/permission edits, access
+revocation, password resets, sign-out-everywhere and permanent account deletion.
+Search by name/email and filter by role or access state. Developers can manage
+ordinary accounts; only superadmins can create or modify staff. Self-modification
+and self-deletion are blocked. Admin-created recruiters require an existing active
+company and receive explicit member permissions without a public invitation flow.
+Passwords set from the console require at least 12 characters and are never returned
+or recorded in audit details. Password resets require the acting admin's password.
+
+Transfer a departing recruiter's jobs to another active recruiter in the same
+company before deleting their account if those jobs/applications should remain.
+Otherwise deletion includes owned jobs and their dependent hiring records. Read the
+preview rather than assuming deletion affects only the user row.
+
+New accounts have an independent session key in addition to the revocation version.
+An old token cannot authenticate a replacement account if a deleted database ID is
+reused. Existing accounts retain their sessions through the additive migration.
+
+### Database Danger Zone
+
+`/dev/database` provides selectable-category cleanup, individual company/job deletion,
+and **Reset all application data**. Bulk operations are superadmin-only. Every
+destructive operation requires a ten-minute, signed, actor-bound preview, the exact
+confirmation phrase, an administrator password, a reason and backup acknowledgement.
+The backend recomputes the dependent row set under a write lock. Changed previews,
+replayed tokens, active requests and running maintenance tasks block execution.
+Database changes and their audit entry commit together or roll back together.
+
+Always retained in bulk reset: developer/superadmin accounts, immutable audit history,
+the maintenance setting, and server-side files/secrets. Staff company/candidate links
+are detached when their referenced records are removed. Other staff accounts can be
+deleted individually by a different superadmin, but never through the bulk users
+category. The current account cannot be deleted. The category selector includes
+jobs, applications, candidates, resumes, profiles, messages, interviews, matches,
+invitations, support sessions, telemetry, embeddings, prompts, configuration and tasks.
+
+Reset is **not a filesystem wipe**. LLM response cache files, repository prompt files,
+model weights, externally exported files and database backups remain on disk. Use
+the separate audited Flush cache action when appropriate. User deletion is not a
+promise to erase retained audit records or unlinked historical model outputs.
+
+No backup is created automatically. Take and verify a database backup before using
+these controls; the acknowledgement is not a backup mechanism. Never use the table
+inspector's redacted output as a restorable database backup.
+
+Pause the workspace before bulk deletion. Maintenance blocks candidate/recruiter API
+requests and login while staff login and developer controls remain available. Wait
+for active calls/tasks to drain, execute the reviewed plan, then explicitly resume
+the workspace. A persistent banner identifies the paused state across admin pages.
+This interlock, like the maintenance task runner, requires a **single API process**;
+it is not distributed coordination for a multi-worker deployment.
+
 Create a company before inviting recruiters. Invitations are email-bound,
 single-use, time-limited (1-30 days) and stored as hashes. The plaintext code is
 shown only when generated; deliver it privately. There is no automatic email

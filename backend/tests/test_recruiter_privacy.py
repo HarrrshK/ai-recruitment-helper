@@ -97,7 +97,7 @@ def test_existing_unassigned_recruiter_joins_by_invitation(api, session_factory)
         db.flush()
         code = issue_invite(db, company.id, user.email)
         db.commit()
-        token = create_access_token({"sub": str(user.id), "role": "recruiter"})
+        token = create_access_token({"sub": str(user.id), "role": "recruiter", "sid": user.session_key})
     headers = {"Authorization": f"Bearer {token}"}
     assert client.get("/api/recruiter/company", headers=headers).json() is None
     assert client.get("/api/recruiter/jobs", headers=headers).status_code == 409

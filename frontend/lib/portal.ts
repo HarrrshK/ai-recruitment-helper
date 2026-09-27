@@ -1,6 +1,6 @@
 import type { Evidence, SkillDetail, ScoreParts } from "@/lib/types";
 
-export type CandidateProfile = { full_name: string; email: string; headline: string; phone: string; location: string; current_position: string; bio: string; skills: string[] };
+export type CandidateProfile = { full_name: string; email: string; public_id: string; visible_fields: string[]; headline: string; phone: string; location: string; current_position: string; bio: string; skills: string[] };
 export type Resume = { id: number; filename: string; size: number; created_at: string };
 export type Assessment = {
   overall_score: number; breakdown: Partial<Record<ScoreParts, number | null>>;
@@ -9,7 +9,7 @@ export type Assessment = {
   evaluated_at: string; review_scores: Record<string, number>;
 };
 export type Application = {
-  id: number; job_id: number; job_title: string; candidate_name: string; status: string;
+  id: number; job_id: number; job_title: string; candidate_name: string; candidate_public_id?: string; status: string;
   resume_name: string; resume_id: number; cover_letter: string; created_at: string; updated_at: string;
   history: { status: string; note: string; at: string }[]; assessment: Assessment | null;
 };
