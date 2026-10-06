@@ -274,6 +274,11 @@ def evaluate(application_id: int, user: User = Depends(get_current_user), db: Se
         check_permission(user, "applicants.review")
     if force and user.role != "recruiter":
         raise HTTPException(403, "Only the hiring team can reassess an application")
+    return evaluate_record(application, db, llm, embedder, force=force)
+
+
+def evaluate_record(application, db, llm, embedder, *, force=False, commit=True):
+    """Shared assessment workflow; callers must authorize the selected application."""
     if application.assessment and not force:
         return application_out(db, application)
     if application.status in ("withdrawn", "rejected", "hired"):
@@ -322,7 +327,8 @@ def evaluate(application_id: int, user: User = Depends(get_current_user), db: Se
         setattr(match, key, assessment[key])
     match.confidence = result.confidence
     match.dropped_quotes = result.dropped_quotes
-    db.commit()
+    if commit:
+        db.commit()
     return application_out(db, application)
 
 

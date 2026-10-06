@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Field, LoadView, selectClass, TableWrap } from "./shared";
 
 type Selection = { groups?: string[]; full_reset?: boolean; user_id?: number; company_id?: number; job_id?: number };
-type Preview = { token: string; confirmation: string; counts: Record<string, number>; total: number; retained_staff: number; detached_memberships: Record<string, number[]>; expires_at: string };
+type Preview = { token: string; confirmation: string; counts: Record<string, number>; total: number; retained_staff: number; detached_memberships: Record<string, number[]>; expires_at: string; bytes?: number; records?: Record<string, number[]>; updates?: [string, number][] };
 
 export function MaintenanceBanner() {
   const query = useFetch<{ enabled: boolean }>("/api/dev/maintenance");
@@ -27,32 +27,33 @@ export function MaintenanceBanner() {
   return <div role="status" className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-400/40 bg-amber-400/15 px-5 py-3 text-sm"><span>Workspace paused for maintenance</span><Link href="/dev/database" className="underline">Manage maintenance</Link></div>;
 }
 
-export function CleanupConfirmation({ selection, onDone }: { selection: Selection; onDone?: () => void }) {
+export function CleanupConfirmation({ selection, onDone, endpoint = "/api/dev/cleanup", operation = false }: { selection: Selection | Record<string, unknown>; onDone?: () => void; endpoint?: string; operation?: boolean }) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [password, setPassword] = useState(""), [reason, setReason] = useState(""), [confirmation, setConfirmation] = useState("");
   const [backup, setBackup] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   return <div className="space-y-5">
-    <Button variant="outline" disabled={busy} onClick={async () => { setBusy(true); setError(""); setPreview(null); setConfirmation(""); setPassword(""); setBackup(false); try { setPreview(await postJson<Preview>("/api/dev/cleanup/preview", selection)); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><Eye className="size-4" />Preview deletion</Button>
+    <Button variant="outline" disabled={busy} onClick={async () => { setBusy(true); setError(""); setPreview(null); setConfirmation(""); setPassword(""); setBackup(false); try { setPreview(await postJson<Preview>(`${endpoint}/preview`, selection)); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><Eye className="size-4" />{operation ? "Preview operation" : "Preview deletion"}</Button>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     {preview && <form className="space-y-5 border-t pt-5" onSubmit={async e => {
       e.preventDefault(); setBusy(true); setError("");
-      try { const result = await postJson<{ total: number; maintenance: boolean }>("/api/dev/cleanup/execute", { token: preview.token, confirmation, password, reason, backup_confirmed: backup }); toast.success(`${result.total} records permanently deleted${result.maintenance ? ". Workspace remains paused." : ""}`); setPreview(null); setPassword(""); onDone?.(); }
+      try { const result = await postJson<{ total: number; maintenance: boolean }>(`${endpoint}/execute`, { token: preview.token, confirmation, password, reason, backup_confirmed: backup }); toast.success(`${result.total} records ${operation ? "affected" : "permanently deleted"}${result.maintenance ? ". Workspace remains paused." : ""}`); setPreview(null); setPassword(""); onDone?.(); }
       catch (e) { setError((e as Error).message); } finally { setBusy(false); }
     }}>
-      <h3 className="text-lg font-semibold">Deletion impact: {preview.total} records</h3>
-      <TableWrap><table><thead><tr><th>Table</th><th>Records to delete</th></tr></thead><tbody>{Object.entries(preview.counts).map(([name, count]) => <tr key={name}><td>{name}</td><td>{count}</td></tr>)}</tbody></table></TableWrap>
+      <h3 className="text-lg font-semibold">{operation ? "Operation" : "Deletion"} impact: {preview.total} records</h3>
+      {operation && <><p className="text-sm">Uploaded bytes affected: {(preview.bytes || 0).toLocaleString()}</p><details className="text-sm"><summary className="cursor-pointer">Exact affected record IDs</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all">{JSON.stringify({ deleted: preview.records, updated: preview.updates }, null, 2)}</pre></details><p className="text-sm text-amber-700 dark:text-amber-300">Maintenance mode must be enabled before execution. Audit history is retained.</p></>}
+      <TableWrap><table><thead><tr><th>Table</th><th>{operation ? "Affected records" : "Records to delete"}</th></tr></thead><tbody>{Object.entries(preview.counts).map(([name, count]) => <tr key={name}><td>{name}</td><td>{count}</td></tr>)}</tbody></table></TableWrap>
       <p className="text-sm text-muted-foreground">Includes dependent records. {preview.retained_staff} staff accounts and audit history are retained. Preview expires at {new Date(preview.expires_at).toLocaleTimeString()}.</p>
       {Object.keys(preview.detached_memberships).length > 0 && <p className="text-sm text-amber-700 dark:text-amber-300">Retained account links will be removed: {Object.entries(preview.detached_memberships).map(([field, ids]) => `${field}: ${ids.map(id => `#${id}`).join(", ")}`).join("; ")}</p>}
-      <Field id="cleanup-reason" label="Deletion reason"><Input id="cleanup-reason" required minLength={3} maxLength={500} value={reason} onChange={e => setReason(e.target.value)} /></Field>
+      <Field id="cleanup-reason" label={operation ? "Operation reason" : "Deletion reason"}><Input id="cleanup-reason" required minLength={3} maxLength={500} value={reason} onChange={e => setReason(e.target.value)} /></Field>
       <Field id="cleanup-password" label="Your administrator password"><PasswordInput id="cleanup-password" required autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></Field>
       <Field id="cleanup-confirmation" label={`Type ${preview.confirmation}`}><Input id="cleanup-confirmation" required autoComplete="off" value={confirmation} onChange={e => setConfirmation(e.target.value)} /></Field>
       <label className="flex items-start gap-3 text-sm"><input className="mt-1" type="checkbox" checked={backup} onChange={e => setBackup(e.target.checked)} />I have a backup or accept permanent data loss. This action cannot be undone.</label>
-      <Button type="submit" variant="destructive" disabled={busy || !preview.total || !backup || confirmation !== preview.confirmation || reason.trim().length < 3 || !password}><Trash2 className="size-4" />{busy ? "Deleting..." : "Permanently delete"}</Button>
+      <Button type="submit" variant="destructive" disabled={busy || !preview.total || !backup || confirmation !== preview.confirmation || reason.trim().length < 3 || !password}><Trash2 className="size-4" />{busy ? "Working..." : operation ? "Execute confirmed operation" : "Permanently delete"}</Button>
     </form>}
   </div>;
 }
 
-function MaintenanceControl() {
+export function MaintenanceControl() {
   const query = useFetch<{ enabled: boolean; active_requests: number }>("/api/dev/maintenance");
   const [password, setPassword] = useState(""), [reason, setReason] = useState(""), [busy, setBusy] = useState(false);
   return <LoadView {...query}>{status => <form className="space-y-4 border-y py-6" onSubmit={async e => { e.preventDefault(); setBusy(true); try { await putJson("/api/dev/maintenance", { enabled: !status.enabled, password, reason }); setPassword(""); query.reload(); window.dispatchEvent(new Event("maintenance-changed")); toast.success(status.enabled ? "Workspace resumed" : "Maintenance enabled"); } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); } }}>

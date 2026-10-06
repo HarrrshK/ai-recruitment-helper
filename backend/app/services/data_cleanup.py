@@ -38,11 +38,15 @@ def chunks(values, size=400):
         yield values[start:start + size]
 
 
-def build_plan(db, groups, actor, user_id=None, company_id=None, job_id=None):
+def build_plan(db, groups, actor, user_id=None, company_id=None, job_id=None, *, seeds=None, preserve=None):
     tables = Base.metadata.tables
     ids = {name: set() for name in tables if name != "audit_logs"}
     protected = set(db.scalars(select(User.id).where(User.role.in_(STAFF_ROLES))))
-    if user_id is not None:
+    if seeds is not None:
+        for name, values in seeds.items():
+            ids[name].update(values)
+        ids["users"] -= protected
+    elif user_id is not None:
         target = db.get(User, user_id)
         if not target:
             raise HTTPException(404, "User not found")
@@ -84,6 +88,9 @@ def build_plan(db, groups, actor, user_id=None, company_id=None, job_id=None):
             ids["messages"].update(db.scalars(select(table.c.id).where(table.c.job_id.in_(batch))))
         changed = sum(map(len, ids.values())) != before
 
+    for name, values in (preserve or {}).items():
+        ids[name].difference_update(values)
+
     # Retained staff may have a candidate profile or company membership that is removed.
     detach = {"candidate_id": [], "company_id": []}
     for column, name in (("candidate_id", "candidates"), ("company_id", "companies")):
@@ -98,6 +105,12 @@ def build_plan(db, groups, actor, user_id=None, company_id=None, job_id=None):
 
 
 def execute_plan(db, plan):
+    # Labels are metadata, not an independent copy of application data.
+    from app.models import RuntimeConfig
+    labels = db.get(RuntimeConfig, "platform.labels")
+    if labels and "platform.labels" not in plan["ids"].get("runtime_config", []):
+        removed = {f"{name}:{key}" for name, keys in plan["ids"].items() for key in keys}
+        labels.value = {key: value for key, value in labels.value.items() if key not in removed}
     for column, users in plan["detach"].items():
         for batch in chunks(users):
             db.execute(update(User).where(User.id.in_(batch)).values({column: None}), execution_options={"synchronize_session": False})

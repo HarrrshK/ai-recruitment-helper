@@ -13,7 +13,7 @@ from app.llm.client import LLMError
 from app.routers import (
     agents, auth, ask, candidates, coach, dashboard, dev, evaluation, interviews, jobs, outreach, panel, portal, qa, recruiter, reports, screening,
 )
-from app.routers import dev_admin
+from app.routers import dev_admin, platform_operations
 from app.services import admin_operations
 
 
@@ -57,6 +57,7 @@ app.include_router(portal.router)
 app.include_router(recruiter.router)
 app.include_router(dev.router)
 app.include_router(dev_admin.router)
+app.include_router(platform_operations.router)
 for hr_router in (jobs.router, candidates.router, screening.router, panel.router,
                   interviews.router, qa.router, outreach.router, ask.router, coach.router,
                   agents.router, dashboard.router, evaluation.router, reports.router):

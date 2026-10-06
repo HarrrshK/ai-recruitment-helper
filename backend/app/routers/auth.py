@@ -88,6 +88,10 @@ def _send_reset_email(to: str, token: str) -> None:
 @router.post("/register", response_model=AuthTokenResponse)
 def register(body: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new recruiter or candidate account."""
+    from app.models import RuntimeConfig
+    registration_policy = db.get(RuntimeConfig, "platform.registrations")
+    if registration_policy and registration_policy.value.get("enabled") is False:
+        raise HTTPException(503, "New registrations are temporarily disabled")
     if body.role not in ("recruiter", "candidate"):
         raise HTTPException(status_code=400, detail="Role must be 'recruiter' or 'candidate'")
     

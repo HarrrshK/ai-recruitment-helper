@@ -47,6 +47,7 @@ node_modules/
 frontend/node_modules/
 frontend/.next/
 frontend/.next-auth-check/
+frontend/.next-polish/
 frontend/out/
 frontend/build/
 frontend/dist/

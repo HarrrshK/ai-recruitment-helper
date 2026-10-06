@@ -36,7 +36,6 @@ def _add_missing_columns() -> None:
     """
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
-    user_columns = {c["name"] for c in inspector.get_columns("users")} if "users" in existing_tables else set()
     with engine.begin() as conn:
         for table in Base.metadata.sorted_tables:
             existing = {c["name"] for c in inspector.get_columns(table.name)}
@@ -44,7 +43,7 @@ def _add_missing_columns() -> None:
                 if column.name not in existing:
                     ddl_type = column.type.compile(dialect=engine.dialect)
                     conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {ddl_type}'))
-        if "users" in existing_tables and "public_id" in user_columns:
+        if "users" in existing_tables:
             from uuid import uuid4
             rows = conn.execute(text("SELECT id FROM users WHERE public_id IS NULL OR public_id = ''")).scalars().all()
             for user_id in rows:

@@ -201,3 +201,70 @@
 .dev-workspace th { text-align: left; font-weight: 500; color: var(--muted-foreground); white-space: nowrap; }
 .dev-workspace th, .dev-workspace td { padding: 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .dev-workspace td { max-width: 400px; overflow-wrap: anywhere; }
+
+/* Shared workspace surfaces and interaction rhythm. */
+:is(.candidate-workspace, .recruiter-workspace, .dev-workspace) {
+  letter-spacing: 0;
+  --radius: 0.5rem;
+}
+:is(.candidate-workspace, .recruiter-workspace) {
+  background: #f8fafb;
+}
+.dark :is(.candidate-workspace, .recruiter-workspace) { background: #131617; }
+:is(.candidate-workspace, .recruiter-workspace) header {
+  background: rgb(255 255 255 / 90%);
+  backdrop-filter: blur(18px);
+}
+.dark :is(.candidate-workspace, .recruiter-workspace) header { background: rgb(22 26 28 / 90%); }
+.recruiter-workspace > aside { background: #ffffff; box-shadow: 4px 0 24px rgb(20 40 60 / 3%); }
+.dark .recruiter-workspace > aside { background: #191d1f; }
+:is(.candidate-workspace, .recruiter-workspace, .dev-workspace) main { animation: workspace-enter 260ms ease-out both; }
+:is(.candidate-workspace, .recruiter-workspace, .dev-workspace) h1 { letter-spacing: 0; line-height: 1.25; }
+:is(.candidate-workspace, .recruiter-workspace, .dev-workspace) :is(button, a, input, select, textarea) {
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+:is(.candidate-workspace, .recruiter-workspace) input:not([type="checkbox"]),
+:is(.candidate-workspace, .recruiter-workspace) :is(textarea, select) { background-color: var(--card); }
+:is(.candidate-workspace, .recruiter-workspace, .dev-workspace) button:not(:disabled):active { transform: translateY(1px); }
+:is(.candidate-workspace, .recruiter-workspace) nav a:hover { background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.recruiter-workspace main article {
+  padding-inline: 12px;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+.recruiter-workspace main article:hover { background: color-mix(in srgb, var(--primary) 3%, var(--card)); }
+.recruiter-workspace main article:has(input[type="checkbox"]:checked) {
+  background: color-mix(in srgb, var(--primary) 6%, var(--card));
+  box-shadow: inset 3px 0 var(--primary);
+}
+.applicant-avatar, .compare-avatar {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; flex-shrink: 0;
+  border-radius: 8px; background: #e3edf9; color: #265493;
+  font-size: 13px; font-weight: 600;
+}
+.compare-avatar-1 { background: #def2eb; color: #17634e; }
+.compare-avatar-2 { background: #f9edcf; color: #79560d; }
+.compare-avatar-3 { background: #f5e1eb; color: #914363; }
+.dark .applicant-avatar, .dark .compare-avatar { background: #233750; color: #b9d6fb; }
+.dark .compare-avatar-1 { background: #203c33; color: #9fe2c9; }
+.dark .compare-avatar-2 { background: #3c3421; color: #edd18e; }
+.dark .compare-avatar-3 { background: #432c38; color: #edb6d0; }
+.comparison-dialog { background: var(--popover); }
+.comparison-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.comparison-table :is(th, td) { text-align: left; vertical-align: top; padding: 22px; border-bottom: 1px solid var(--border); border-right: 1px solid var(--border); overflow-wrap: anywhere; }
+.comparison-table thead th { position: sticky; top: 0; z-index: 2; background: var(--popover); box-shadow: 0 1px var(--border); }
+.comparison-table tbody th { font-size: 12px; font-weight: 600; background: color-mix(in srgb, var(--muted) 45%, var(--popover)); }
+.comparison-table tbody tr:hover td { background: color-mix(in srgb, var(--primary) 2%, var(--popover)); }
+.comparison-table tbody td { font-size: 13px; }
+.comparison-content, .comparison-tray { animation: workspace-enter 220ms ease-out both; }
+@keyframes workspace-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 640px) {
+  :is(.candidate-workspace, .recruiter-workspace) main h1 { font-size: 26px; }
+  .applicant-avatar { width: 32px; height: 32px; }
+  .comparison-table :is(th, td) { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :is(.candidate-workspace, .recruiter-workspace, .dev-workspace) *, .comparison-tray, .comparison-content {
+    animation: none !important; transition: none !important; scroll-behavior: auto !important;
+  }
+}

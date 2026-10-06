@@ -11,6 +11,10 @@ export async function errorMessage(response: Response): Promise<string> {
   try {
     const body = await response.json();
     if (typeof body.detail === "string") return body.detail;
+    if (typeof body.detail?.message === "string") {
+      const blocked = body.detail.blocked_records as Record<string, number[]> | undefined;
+      return body.detail.message + (blocked ? " " + Object.entries(blocked).map(([table, ids]) => `${table}: ${ids.join(", ")}`).join("; ") : "");
+    }
     if (Array.isArray(body.detail)) {
       return "Invalid input: " + body.detail.map((d: { msg: string }) => d.msg).join("; ");
     }

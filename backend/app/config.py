@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     llm_model_small: str = "openai/gpt-oss-20b"
     llm_max_attempts: int = 8  # free tiers rate-limit hard; waiting is cheaper than failing
     llm_timeout_seconds: float = 60.0
+    ollama_model: str = ""
+    ollama_base_url: str = "http://127.0.0.1:11434/v1"
 
     database_url: str = f"sqlite:///{(BACKEND_DIR / 'data' / 'hr.db').as_posix()}"
     llm_cache_dir: Path = BACKEND_DIR / "data" / "llm_cache"

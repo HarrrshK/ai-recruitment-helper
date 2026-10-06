@@ -115,7 +115,7 @@ def session_user(user: User, payload: dict[str, Any]) -> User:
     if role not in (*STAFF_ROLES, "recruiter", "candidate") or (role != "candidate" and role != user.role):
         raise HTTPException(status_code=403, detail="Role access denied")
     # A detached principal keeps the session role from changing the account role.
-    return User(id=user.id, email=user.email, full_name=user.full_name,
+    return User(id=user.id, public_id=user.public_id, email=user.email, full_name=user.full_name,
                 role=role, candidate_id=user.candidate_id, company_id=user.company_id,
                 permissions=user.permissions, disabled=user.disabled, token_version=user.token_version, session_key=user.session_key)
 
@@ -165,4 +165,10 @@ def require_legacy_recruiter(user: User = Depends(require_recruiter), db: Sessio
 def require_developer(user: User = Depends(get_current_user)) -> User:
     if user.role not in STAFF_ROLES or getattr(user, "impersonation_id", None):
         raise HTTPException(403, "Developer access required")
+    return user
+
+
+def require_superadmin(user: User = Depends(require_developer)) -> User:
+    if user.role != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
     return user

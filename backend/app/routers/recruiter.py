@@ -9,10 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.interviewer import generate_questions
-from app.agents.jd_generator import JobRequirements, extract_requirements, stream_jd
+from app.agents.jd_generator import JobRequirements
+from app.agents.job_draft import JobDraft, generate_draft
 from app.agents.resume_parser import parse_resume
 from app.auth import require_recruiter
-from app.db import get_db
+from app.db import get_db, get_session_factory
+from app.llm.job_drafts import job_draft_client
+from app.llm.client import LLMError
 from app.llm.client import LLMClient, get_llm
 from app.models import Application, CandidateProfile, HiringInterview, Job, Resume, User
 from app.routers.portal import application_out, change_status, owned_application
@@ -22,6 +25,43 @@ from app.services.permissions import check_permission
 from app.services.audit import record
 
 router = APIRouter(prefix="/api/recruiter", tags=["recruiter"], dependencies=[Depends(require_recruiter)])
+
+
+class ComparisonIn(BaseModel):
+    job_id: int
+    application_ids: list[int] = Field(min_length=2, max_length=4)
+
+    @field_validator("application_ids")
+    @classmethod
+    def distinct_applicants(cls, value):
+        if len(set(value)) != len(value):
+            raise ValueError("Select distinct applicants")
+        return value
+
+
+@router.post("/comparison")
+def compare_applicants(body: ComparisonIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    from app.services.resume_sections import resume_sections
+
+    check_permission(user, "applicants.review")
+    job = company_job(db, body.job_id, user)
+    applications = [owned_application(db, app_id, user) for app_id in body.application_ids]
+    if any(row.job_id != job.id for row in applications):
+        raise HTTPException(422, "Select applicants for the same job")
+    candidates = []
+    for application in applications:
+        detail = applicant(application.id, user, db)
+        resume = db.get(Resume, application.resume_id)
+        assessment = detail.get("assessment")
+        if assessment:
+            # Only quotations present in the application document can be comparison evidence.
+            detail["assessment"] = {**assessment, "evidence": [item for item in assessment.get("evidence", [])
+                if item.get("quote", "").strip() and item["quote"] in resume.text]}
+        detail["resume_sections"] = resume_sections(resume.text)
+        detail["interviews"] = [interview_out(db, row) for row in db.scalars(
+            select(HiringInterview).where(HiringInterview.application_id == application.id).order_by(HiringInterview.id))]
+        candidates.append(detail)
+    return {"job": job_out(db, job), "candidates": candidates}
 
 
 class CompanyIn(BaseModel):
@@ -209,20 +249,30 @@ def applicant(application_id: int, user: User = Depends(require_recruiter), db: 
             "candidate_public_id": account.public_id, "visible_fields": sorted(visible)}
 
 
-class GenerateJobIn(BaseModel):
-    title: str = Field(min_length=2, max_length=200)
-    brief: str = Field(default="", max_length=3000)
+class GenerateJobIn(JobIn):
+    @field_validator("requirements")
+    @classmethod
+    def bounded_draft(cls, value):
+        if value.education and len(value.education) > 2000:
+            raise ValueError("Education must be at most 2000 characters")
+        if sum(len(item) for item in value.responsibilities) > 10000:
+            raise ValueError("Responsibilities must total at most 10000 characters")
+        if any(not item.strip() for item in value.responsibilities):
+            raise ValueError("Responsibilities cannot be blank")
+        return value
 
 
-@router.post("/jobs/generate")
-def generate_job(body: GenerateJobIn, user: User = Depends(require_recruiter), llm: LLMClient = Depends(get_llm)):
+@router.post("/jobs/generate", response_model=JobDraft)
+def generate_job(body: GenerateJobIn, user: User = Depends(require_recruiter),
+                 db: Session = Depends(get_db), session_factory=Depends(get_session_factory)):
     if "jobs.create" not in (user.permissions or []) and "jobs.edit" not in (user.permissions or []):
         check_permission(user, "jobs.create")
-    markdown = "".join(stream_jd(body.title, body.brief, llm)).strip()
-    if not markdown:
-        raise HTTPException(502, "The job description generator returned no content")
-    requirements = extract_requirements(markdown, llm)
-    return {"markdown": markdown, "requirements": requirements.model_dump()}
+    company_for(db, user)
+    llm = job_draft_client(session_factory)
+    try:
+        return generate_draft(body, llm)
+    except LLMError as exc:
+        raise HTTPException(502, "Ollama could not produce a valid job draft. Retry or continue manually.") from exc
 
 
 @router.get("/applicants/{application_id}/resume")

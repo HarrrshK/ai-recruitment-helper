@@ -72,3 +72,20 @@ LLM_MODEL_SMALL=llama3.1:8b
 ```
 
 All people and resumes in `backend/data/sample_resumes` are fictional.
+
+### Recruiter job-description drafts
+
+The job editor supports manual writing and an Ollama-assisted, review-before-save draft.
+To use a dedicated local model while other agents keep their current provider, set
+`OLLAMA_MODEL` to an installed model name and optionally set `OLLAMA_BASE_URL`
+(default `http://127.0.0.1:11434/v1`). Otherwise drafting uses an Ollama model from
+the developer console's primary/fallback configuration, or the port-11434 `.env`
+configuration above. Drafting never falls back to a cloud provider.
+
+`POST /api/recruiter/jobs/generate` accepts the existing job input schema and returns
+editable sections, their source fields, generated wording, Markdown, and unchanged
+assessment requirements. It does not save a job. To enforce grounding, Pydantic
+validates a constrained wording/ordering plan: every supplied requirement must appear
+exactly once, with no new facts or free-form model requirements. Text is rendered from
+the original inputs. Recruiter edits are reviewed before the existing job create/update
+endpoint is used. No model download is performed automatically.
