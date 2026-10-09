@@ -21,6 +21,7 @@ from app.services.embeddings import Embedder, get_embedder
 from app.services.resume_text import MAX_BYTES, ResumeFileError, extract_resume_text
 from app.services.workspaces import owned_jobs
 from app.services.permissions import check_permission
+from app.services.matching_policy import improvement_steps
 
 router = APIRouter(prefix="/api/portal", tags=["candidate portal"])
 
@@ -43,7 +44,8 @@ def application_out(db: Session, application: Application) -> dict:
     owner = db.get(User, application.user_id)
     job = db.get(Job, application.job_id)
     company = db.get(Company, job.company_id) if job and job.company_id else None
-    return {"id": application.id, "job_id": application.job_id, "job_title": application.job_title,
+    return {"improvement_steps": improvement_steps(application.assessment or {}),
+            "id": application.id, "job_id": application.job_id, "job_title": application.job_title,
             "candidate_public_id": owner.public_id,
             "candidate_name": owner.full_name, "status": application.status,
             "resume_name": resume.filename, "resume_id": resume.id,
@@ -235,7 +237,9 @@ def screen_resume(resume_id: int, user: User = Depends(require_candidate), db: S
     if not resume or resume.user_id != user.id or resume.archived:
         raise HTTPException(404, "Resume not found")
     profile = parse_resume(resume.text, llm)
-    skills = {skill.casefold() for skill in profile.skills}
+    from app.services.skills import mentions, normalize_skill
+    skills = {normalize_skill(skill)[0] for skill in profile.skills}
+    applied_jobs = set(db.scalars(select(Application.job_id).where(Application.user_id == user.id)))
     results = []
     public_jobs = jobs(db=db)
     for item in public_jobs:
@@ -244,16 +248,25 @@ def screen_resume(resume_id: int, user: User = Depends(require_candidate), db: S
         nice = list(requirements.get("nice_to_have_skills") or [])
         if not must and not nice:
             continue
-        norm = lambda value: str(value).strip().casefold()
-        matched_must = [skill for skill in must if norm(skill) in skills]
-        missing_must = [skill for skill in must if norm(skill) not in skills]
-        matched_nice = [skill for skill in nice if norm(skill) in skills]
+        def found(value):
+            return any(mentions(skill, normalize_skill(value)[0]) for skill in skills)
+        matched_must = [skill for skill in must if found(skill)]
+        missing_must = [skill for skill in must if not found(skill)]
+        matched_nice = [skill for skill in nice if found(skill)]
         score = round((len(matched_must) * 2 + len(matched_nice)) / max(1, len(must) * 2 + len(nice)) * 100)
+        minimum = int(requirements.get("min_years_experience") or 0)
+        experience_score = min(100, 100 * profile.total_years_experience / minimum) if minimum else 100
+        recommendation_score = round(score * 0.7 + experience_score * 0.3, 1) if minimum else score
+        steps = [f"Build and document genuine evidence for {skill}." for skill in missing_must]
+        if profile.total_years_experience < minimum:
+            steps.append(f"This role asks for {minimum} years; consider roles closer to your current experience while building relevant work experience.")
         results.append({"job": item, "fit_score": score, "matched_must": matched_must,
                         "missing_must": missing_must, "matched_nice": matched_nice,
-                        "min_years": int(requirements.get("min_years_experience") or 0),
+                        "recommendation_score": recommendation_score, "already_applied": item["id"] in applied_jobs,
+                        "recommendation": "Strong starting fit" if recommendation_score >= 80 and not missing_must and experience_score == 100 else "Some gaps to address" if recommendation_score >= 50 else "Stretch role",
+                        "next_steps": steps, "visibility": "private", "min_years": minimum,
                         "candidate_years": round(profile.total_years_experience, 1)})
-    return sorted(results, key=lambda row: row["fit_score"], reverse=True)
+    return sorted(results, key=lambda row: (-row["recommendation_score"], row["job"]["id"]))
 
 
 @router.get("/applications/{application_id}")
@@ -279,12 +292,12 @@ def evaluate(application_id: int, user: User = Depends(get_current_user), db: Se
         check_permission(user, "applicants.review")
     if force and user.role != "recruiter":
         raise HTTPException(403, "Only the hiring team can reassess an application")
-    return evaluate_record(application, db, llm, embedder, force=force)
+    return evaluate_record(application, db, llm, embedder, force=force, private=user.role != "recruiter")
 
 
-def evaluate_record(application, db, llm, embedder, *, force=False, commit=True):
+def evaluate_record(application, db, llm, embedder, *, force=False, commit=True, private=False):
     """Shared assessment workflow; callers must authorize the selected application."""
-    if application.assessment and not force:
+    if application.assessment and not force and not private:
         return application_out(db, application)
     if application.status in ("withdrawn", "rejected", "hired"):
         raise HTTPException(409, "This application is closed")
@@ -299,7 +312,7 @@ def evaluate_record(application, db, llm, embedder, *, force=False, commit=True)
     result = match_candidate(job_title=job.title, requirements=requirements, profile=profile,
                              resume_text=resume.text, llm=llm, embedder=embedder, custom_weights=job.matching_rules)
     available = {key: value for key, value in result.breakdown.items() if value is not None}
-    weights = {key: (job.matching_rules or {}).get(key, WEIGHTS[key]) for key in available}
+    weights = {key: (job.matching_rules or {}).get(key, WEIGHTS.get(key, 0)) for key in available}
     total = sum(weights.values()) or 1
     weights = {key: value / total for key, value in weights.items()}
     # Save the scoring inputs alongside the result; later resume/job edits cannot rewrite the explanation.
@@ -310,6 +323,9 @@ def evaluate_record(application, db, llm, embedder, *, force=False, commit=True)
                   "years_experience": profile.total_years_experience,
                   "minimum_years": requirements.min_years_experience,
                   "review_scores": result.review_scores, "evaluated_at": datetime.now(UTC).isoformat(), "job_revision": revision}
+    if private:
+        return {**application_out(db, application), "private_assessment": assessment,
+                "private_improvement_steps": improvement_steps(assessment), "screening_visibility": "private"}
     db.refresh(application)
     if application.status in ("withdrawn", "rejected", "hired"):
         raise HTTPException(409, "This application was closed during evaluation")

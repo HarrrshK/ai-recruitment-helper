@@ -92,7 +92,7 @@ export type Evidence = {
   in_original?: boolean | null;
 };
 
-export type ScoreParts = "skills" | "semantic" | "experience" | "ai_review";
+export type ScoreParts = "skills" | "semantic" | "experience" | "ai_review" | "eligibility" | "projects";
 
 export type CandidateBrief = {
   id: number;

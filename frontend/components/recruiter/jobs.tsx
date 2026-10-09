@@ -9,6 +9,7 @@ import { postJson, putJson } from "@/lib/api";
 import { jobStatuses, type RecruiterJob } from "@/lib/recruiter";
 import { dateLabel } from "@/lib/portal";
 import { PortalHeading } from "@/components/portal-shared";
+import { MatchingWeights, defaultWeights } from "@/components/recruiter/matching-weights";
 import { Field, LoadView, selectClass } from "@/components/recruiter/shared";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +47,9 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
   const [education, setEducation] = useState(initial?.requirements?.education || "");
   const [duties, setDuties] = useState(initial?.requirements?.responsibilities.join("\n") || "");
   const [status, setStatus] = useState(initial?.status || "draft");
+  const [weights, setWeights] = useState<Record<string, number>>(() => Object.fromEntries(Object.entries(defaultWeights).map(([key, value]) => [key, initial?.matching_rules?.[key] !== undefined ? Math.round(initial.matching_rules[key] * 100) : value])));
+  const weightsValid = Object.values(weights).reduce((sum, value) => sum + value, 0) === 100;
+  const [refinement, setRefinement] = useState("");
   const [busy, setBusy] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [mode, setMode] = useState<"manual" | "ai">("manual");
@@ -62,19 +66,20 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
   const router = useRouter();
   async function save(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (generating || reviewPending) return;
+    if (generating || reviewPending || !weightsValid) return;
     setBusy(true);
     const requestedStatus = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("value") || status;
-    const body = { ...inputs, markdown: form.markdown, status: requestedStatus };
+    const body = { ...inputs, markdown: form.markdown, status: requestedStatus, matching_rules: Object.fromEntries(Object.entries(weights).map(([key, value]) => [key, value / 100])) };
     try { if (initial) await putJson(`/api/recruiter/jobs/${initial.id}`, body); else await postJson("/api/recruiter/jobs", body); toast.success(requestedStatus === "ready" ? "Job published" : "Job saved"); router.push("/recruiter/jobs"); }
     catch (error) { toast.error((error as Error).message); setBusy(false); }
   }
   async function generateProfile() {
     if (form.title.trim().length < 2) { setGenerationError("Add a job title with at least two characters."); return; }
     if (!Number.isInteger(years) || years < 0 || years > 60) { setGenerationError("Experience must be a whole number between 0 and 60."); return; }
+    if (generated && !window.confirm("Replace the current AI draft, including your section edits? The job description below will be preserved until you use the new draft.")) return;
     setGenerationError("");
     setGenerating(true);
-    try { setGenerated(await postJson<NonNullable<typeof generated>>("/api/recruiter/jobs/generate", inputs)); setDraftSource(source); }
+    try { setGenerated(await postJson<NonNullable<typeof generated>>("/api/recruiter/jobs/generate", { ...inputs, refinement })); setDraftSource(source); }
     catch (error) { setGenerationError((error as Error).message); }
     finally { setGenerating(false); }
   }
@@ -87,11 +92,12 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
     setGenerated(null);
   }
   return <><Link href="/recruiter/jobs" className="mb-5 inline-flex items-center gap-2 text-sm text-muted-foreground"><ArrowLeft className="size-4" />All jobs</Link><PortalHeading title={initial ? "Edit job" : "Create a job"} description={initial ? initial.title : "Define the role and the requirements candidates will be assessed against."} />
-    <form onSubmit={save} className="max-w-4xl space-y-8">
+    <form onSubmit={save} className="space-y-8">
       <div role="group" aria-label="Description creation mode" className="inline-flex flex-wrap gap-1 rounded-md border bg-muted p-1">
         <Button type="button" variant={mode === "manual" ? "secondary" : "ghost"} aria-pressed={mode === "manual"} disabled={generating || busy} onClick={() => { setMode("manual"); setGenerated(null); setGenerationError(""); }}><Pencil className="size-4" />Write manually</Button>
         <Button type="button" variant={mode === "ai" ? "secondary" : "ghost"} aria-pressed={mode === "ai"} disabled={generating || busy} onClick={() => setMode("ai")}><Sparkles className="size-4" />Draft with Ollama</Button>
       </div>
+      <div className={mode === "ai" ? "grid items-start gap-8 xl:grid-cols-2" : "max-w-4xl"}>
       <fieldset disabled={generating || busy} className="space-y-8 disabled:opacity-70">
         <section className="space-y-5 border-t pt-6">
           <h2 className="text-lg font-semibold">Role details</h2>
@@ -114,9 +120,12 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
           </div>
           <Field id="responsibilities" label="Responsibilities (one per line)"><Textarea id="responsibilities" rows={4} maxLength={10000} value={duties} onChange={e => setDuties(e.target.value)} /></Field>
         </section>
+        <MatchingWeights value={weights} onChange={setWeights} />
       </fieldset>
       {mode === "ai" && <section className="space-y-5 border-t pt-6" aria-busy={generating}>
         <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">AI draft review</h2><Button type="button" variant="outline" disabled={generating || busy} onClick={generateProfile}>{generating ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{generating ? "Generating draft..." : generated || reviewedSource ? "Regenerate draft" : "Generate draft"}</Button></div>
+        <Field id="draft-refinement" label="Refinement request"><Textarea id="draft-refinement" value={refinement} onChange={e => setRefinement(e.target.value)} maxLength={1000} disabled={generating || busy} placeholder="For example: use a formal tone and prioritize API responsibilities." rows={3} /></Field>
+        <p className="text-xs text-muted-foreground">For new requirements, edit the role inputs. Refinements change wording and ordering, not the supplied facts.</p>
         {generating && <p role="status" className="text-sm text-muted-foreground">Ollama is preparing your draft. No job has been saved.</p>}
         {generationError && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{generationError}</p>}
         {stale && <p role="alert" className="text-sm text-amber-700 dark:text-amber-300">Role details changed. Regenerate the draft or continue manually before saving.</p>}
@@ -129,12 +138,13 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
           <div className="flex flex-wrap gap-2"><Button type="button" disabled={generating || stale} onClick={useGenerated}>Use reviewed draft</Button><Button type="button" variant="ghost" disabled={generating} onClick={() => setGenerated(null)}>Discard draft</Button></div>
         </div>}
       </section>}
+      </div>
       <section className="space-y-3 border-t pt-6">
         <div className="flex flex-wrap items-center justify-between gap-2"><label htmlFor="job-description" className="text-lg font-semibold">Job description</label>{reviewedSource && <span className="text-xs text-muted-foreground">Reviewed AI draft, editable</span>}</div>
         <Textarea id="job-description" rows={12} maxLength={30000} disabled={generating || busy} value={form.markdown} onChange={e => setForm({ ...form, markdown: e.target.value })} />
       </section>
       <div className="flex flex-wrap items-end gap-3 border-t pt-6">
-        {initial ? <><Field id="edit-status" label="Job status"><select id="edit-status" className={selectClass} value={status} onChange={e => setStatus(e.target.value as RecruiterJob["status"])}>{Object.entries(jobStatuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Button type="submit" disabled={busy || generating || reviewPending}><Save className="size-4" />{busy ? "Saving..." : "Save changes"}</Button></> : <><Button type="submit" value="draft" variant="outline" disabled={busy || generating || reviewPending}><Save className="size-4" />Save draft</Button><Button type="submit" value="ready" disabled={busy || generating || reviewPending}><Send className="size-4" />{busy ? "Saving..." : "Publish job"}</Button></>}
+        {initial ? <><Field id="edit-status" label="Job status"><select id="edit-status" className={selectClass} value={status} onChange={e => setStatus(e.target.value as RecruiterJob["status"])}>{Object.entries(jobStatuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Button type="submit" disabled={busy || generating || reviewPending || !weightsValid}><Save className="size-4" />{busy ? "Saving..." : "Save changes"}</Button></> : <><Button type="submit" value="draft" variant="outline" disabled={busy || generating || reviewPending || !weightsValid}><Save className="size-4" />Save draft</Button><Button type="submit" value="ready" disabled={busy || generating || reviewPending || !weightsValid}><Send className="size-4" />{busy ? "Saving..." : "Publish job"}</Button></>}
         <Link href="/recruiter/jobs" className={buttonVariants({ variant: "ghost" })}>Cancel</Link>
       </div>
     </form></>;

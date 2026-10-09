@@ -24,7 +24,7 @@ class JobDraft(BaseModel):
 
 
 def generate_draft(body, llm: LLMClient) -> JobDraft:
-    facts = body.model_dump(exclude={"markdown", "status"})
+    facts = body.model_dump(exclude={"markdown", "status", "matching_rules", "refinement"})
     requirements = body.requirements
     lists = {"required": requirements.must_have_skills,
              "preferred": requirements.nice_to_have_skills,
@@ -56,6 +56,7 @@ def generate_draft(body, llm: LLMClient) -> JobDraft:
             "benefits, or requirements. Approved wording will be rendered around the exact supplied facts.")},
         {"role": "user", "content": json.dumps({
             "recruiter_facts": facts,
+            "wording_preferences": body.refinement,
             "indexed_lists": {key: [{"index": i, "text": item} for i, item in enumerate(items)]
                               for key, items in lists.items()},
             "valid_starting_plan": {"tone": "direct", **{key: list(range(len(items))) for key, items in lists.items()}},

@@ -6,6 +6,7 @@ export type RecruiterJob = {
   id: number; title: string; brief: string; markdown: string; requirements: Requirements | null;
   status: "draft" | "ready" | "closed"; location: string; work_mode: string; employment_type: string;
   revision: number; applicants: number; shortlisted: number; created_at: string;
+  matching_rules?: Record<string, number> | null;
 };
 export type Applicant = Application & { rank: number | null; assessment_stale: boolean; company_name: string };
 export type ApplicantDetail = Applicant & { email: string; resume_text: string; profile: Omit<CandidateProfile, "full_name" | "email"> };

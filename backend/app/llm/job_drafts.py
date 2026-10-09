@@ -1,5 +1,6 @@
 """Ollama-only routing for job drafts, without changing other agents' routing."""
 from urllib.parse import urlparse
+import httpx
 
 from fastapi import HTTPException
 
@@ -25,8 +26,22 @@ def job_draft_client(session_factory) -> LLMClient:
         # Preserve the documented .env-only Ollama configuration.
         selected = settings.model_copy(update={"llm_api_key": "ollama"})
     else:
-        raise HTTPException(503, "Job drafting needs Ollama. Ask an administrator to configure an Ollama model; manual creation is still available.")
-    selected = selected.model_copy(update={"llm_max_attempts": 2})
+        # A single installed local model is unambiguous; never fall back to a cloud provider.
+        try:
+            base = settings.ollama_base_url.rstrip("/").removesuffix("/v1")
+            response = httpx.get(f"{base}/api/tags", timeout=5)
+            response.raise_for_status()
+            models = response.json().get("models", [])
+            names = [item["name"] for item in models if isinstance(item.get("name"), str) and
+                     (not item.get("capabilities") or "completion" in item["capabilities"])]
+        except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise HTTPException(503, "Ollama is unavailable. Start the local service or configure it in Platform LLM settings. Your draft inputs are preserved.") from exc
+        if len(names) != 1:
+            raise HTTPException(503, "Select an installed Ollama model in Platform LLM settings or OLLAMA_MODEL. Your draft inputs are preserved.")
+        selected = settings.model_copy(update={"llm_base_url": f"{base}/v1", "llm_api_key": "ollama",
+                                              "llm_model_small": names[0], "llm_model_large": names[0]})
+    selected = selected.model_copy(update={"llm_max_attempts": 2,
+                                           "llm_timeout_seconds": max(120, selected.llm_timeout_seconds)})
     client = LLMClient(settings=selected, session_factory=session_factory)
     client.provider = "ollama"
     client.cost_per_million = 0

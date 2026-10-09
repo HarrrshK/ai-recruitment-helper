@@ -130,6 +130,13 @@ class JobIn(BaseModel):
     employment_type: Literal["full_time", "part_time", "contract", "internship"] = "full_time"
     requirements: JobRequirements
     status: Literal["draft", "ready", "closed"] = "draft"
+    matching_rules: dict[str, float] | None = None
+
+    @field_validator("matching_rules")
+    @classmethod
+    def valid_matching_rules(cls, value):
+        from app.services.matching_policy import validate_weights
+        return validate_weights(value)
 
     @field_validator("title")
     @classmethod
@@ -159,7 +166,7 @@ def job_out(db: Session, job: Job):
             "location": job.location or "", "work_mode": job.work_mode or "onsite",
             "employment_type": job.employment_type or "full_time", "revision": job.revision or 1,
             "created_at": job.created_at, "applicants": len(applications),
-            "shortlisted": sum(a.status == "shortlisted" for a in applications)}
+            "shortlisted": sum(a.status == "shortlisted" for a in applications), "matching_rules": job.matching_rules}
 
 
 def write_job(db: Session, job: Job, body: JobIn, user: User):
@@ -168,10 +175,13 @@ def write_job(db: Session, job: Job, body: JobIn, user: User):
     if body.status == "ready" and (not body.markdown.strip() or not company.name.strip()):
         raise HTTPException(422, "Add a company name and job description before publishing")
     description = {"markdown": body.markdown, "requirements": body.requirements.model_dump()}
-    if job.id and (job.title != body.title or job.description != description):
+    if job.id and (job.title != body.title or job.description != description or
+                   (body.matching_rules is not None and job.matching_rules != body.matching_rules)):
         job.revision = (job.revision or 1) + 1
-    for key, value in body.model_dump(exclude={"markdown", "requirements"}).items():
+    for key, value in body.model_dump(exclude={"markdown", "requirements", "matching_rules"}).items():
         setattr(job, key, value)
+    if body.matching_rules is not None:
+        job.matching_rules = body.matching_rules
     job.company_id = company.id
     if job.id is None:
         job.creator_id = user.id
@@ -250,6 +260,7 @@ def applicant(application_id: int, user: User = Depends(require_recruiter), db: 
 
 
 class GenerateJobIn(JobIn):
+    refinement: str = Field(default="", max_length=1000)
     @field_validator("requirements")
     @classmethod
     def bounded_draft(cls, value):

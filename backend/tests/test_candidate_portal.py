@@ -208,6 +208,15 @@ def test_assessment_uses_submitted_resume_and_keeps_explanations(api, session_fa
     monkeypatch.setattr(portal, "match_candidate", assess)
     response = client.post(f"/api/portal/applications/{application}/evaluate", headers=headers)
     assert response.status_code == 200, response.text
+    assert response.json()["status"] == "applied"
+    assert response.json()["assessment"] is None
+    assert response.json()["private_assessment"]["overall_score"] == 80
+    assert response.json()["screening_visibility"] == "private"
+    with session_factory() as db:
+        assert db.get(Application, application).assessment is None
+        assert db.scalar(select(Candidate)).parsed_profile is None
+    # Only the recruiter can publish an official assessment and change screening status.
+    response = client.post(f"/api/portal/applications/{application}/evaluate")
     assert response.json()["status"] == "screened"
     assessment = response.json()["assessment"]
     assert assessment["weights"]["skills"] == pytest.approx(0.3)

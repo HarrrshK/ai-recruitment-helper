@@ -104,6 +104,10 @@ def test_generation_failure_manual_still_works(api, make_llm, monkeypatch):
 def test_ollama_routing_never_uses_cloud(session_factory, monkeypatch):
     config = Settings(_env_file=None, ollama_model="", llm_base_url="https://api.groq.com/openai/v1")
     monkeypatch.setattr("app.llm.job_drafts.Settings", lambda: config)
+    import httpx
+    def unavailable(*args, **kwargs):
+        raise httpx.ConnectError("offline")
+    monkeypatch.setattr("app.llm.job_drafts.httpx.get", unavailable)
     with pytest.raises(HTTPException) as error:
         job_draft_client(session_factory)
     assert error.value.status_code == 503
@@ -124,3 +128,22 @@ def test_documented_ollama_env_configuration(session_factory, monkeypatch):
     client = job_draft_client(session_factory)
     assert client.settings.llm_model_small == "local-model"
     assert client.settings.llm_api_key == "ollama"
+
+
+def test_single_installed_ollama_discovery(session_factory, monkeypatch):
+    from types import SimpleNamespace
+    config = Settings(_env_file=None, ollama_model="", llm_base_url="https://api.groq.com/openai/v1", ollama_base_url="http://localhost:11434/v1")
+    monkeypatch.setattr("app.llm.job_drafts.Settings", lambda: config)
+    monkeypatch.setattr("app.llm.job_drafts.httpx.get", lambda *args, **kwargs: SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"models": [{"name": "local-model", "capabilities": ["completion"]}]}))
+    client = job_draft_client(session_factory)
+    assert client.provider == "ollama"
+    assert client.settings.llm_model_small == "local-model"
+    assert client.settings.llm_base_url == "http://localhost:11434/v1"
+
+
+def test_refinement_does_not_change_supplied_requirements(make_llm):
+    llm, fake = make_llm([json.dumps({**PLAN, "tone": "formal"})])
+    draft = generate_draft(GenerateJobIn(**INPUT, refinement="Use a formal tone"), llm)
+    assert draft.requirements.model_dump() == INPUT["requirements"]
+    assert draft.generated_wording == "Position available:"
+    assert "Use a formal tone" in fake.completions.calls[0]["messages"][-1]["content"]

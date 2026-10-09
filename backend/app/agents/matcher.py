@@ -25,9 +25,10 @@ from app.prompts import load_prompt
 from app.services.anonymizer import anonymize_resume
 from app.services.embeddings import Embedder, semantic_score
 from app.services.skills import SkillDetail, assess_skills
+from app.services.matching_policy import DEFAULT_WEIGHTS, additional_signals
 
 # Blend weights, fixed in advance. A component that cannot be computed is dropped and the rest renormalised.
-WEIGHTS = {"skills": 0.30, "semantic": 0.10, "experience": 0.20, "ai_review": 0.40}
+WEIGHTS = {key: value for key, value in DEFAULT_WEIGHTS.items() if value > 0}
 # Inside the AI review. The experience_score line is not blended here: it is the relevance factor that
 # gates the years-of-experience signal, so each judgement is used exactly once.
 REVIEW_WEIGHTS = {"skills_score": 0.60, "domain_fit_score": 0.40}
@@ -181,6 +182,9 @@ def match_candidate(
     experience = None if years is None else round(years * review.experience_score / 100, 1)
 
     components = {"skills": skills, "semantic": semantic, "experience": experience, "ai_review": ai_review}
+    if custom_weights:
+        components.update({key: value for key, value in additional_signals(requirements, profile, resume_text).items()
+                           if custom_weights.get(key, 0) > 0})
     return MatchResult(
         overall_score=_blend(components, custom_weights),
         breakdown=components,

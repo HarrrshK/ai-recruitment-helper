@@ -9,10 +9,14 @@ export type Assessment = {
   evaluated_at: string; review_scores: Record<string, number>;
 };
 export type Application = {
+  private_assessment?: Assessment;
+  private_improvement_steps?: ImprovementStep[];
+  improvement_steps?: ImprovementStep[];
   id: number; job_id: number; job_title: string; candidate_name: string; candidate_public_id?: string; status: string;
   resume_name: string; resume_id: number; cover_letter: string; created_at: string; updated_at: string;
   history: { status: string; note: string; at: string }[]; assessment: Assessment | null;
 };
+export type ImprovementStep = { criterion: string; action: string; current_score: number; max_additional_points: number };
 export type ConversationMessage = { id: number; sender_role: "candidate" | "recruiter"; sender_name: string; body: string; created_at: string };
 export const statusLabels: Record<string, string> = { applied: "Application received", screened: "Screened", shortlisted: "Shortlisted", interview: "Interview", offer: "Offer", hired: "Hired", rejected: "Not selected", withdrawn: "Withdrawn" };
 export function dateLabel(value: string) { return new Date(value).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); }
