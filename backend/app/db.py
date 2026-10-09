@@ -1,3 +1,4 @@
+import os
 from collections.abc import Iterator
 
 from sqlalchemy import create_engine, event, inspect, text
@@ -51,6 +52,34 @@ def _add_missing_columns() -> None:
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_public_id ON users (public_id)"))
 
 
+def _ensure_default_admin() -> None:
+    """Auto-bootstrap a SuperAdmin user on database init if none exists."""
+    from sqlalchemy import select
+    from app.models import User
+    from app.auth import hash_password
+
+    admin_email = os.getenv("ADMIN_EMAIL", "helloharsh24@gmail.com").lower().strip()
+    admin_password = os.getenv("ADMIN_PASSWORD", "9850harsha")
+
+    with SessionLocal() as db:
+        admin = db.scalar(select(User).where(User.role == "superadmin"))
+        if not admin:
+            existing = db.scalar(select(User).where(User.email == admin_email))
+            if existing:
+                existing.role = "superadmin"
+                existing.password_hash = hash_password(admin_password)
+            else:
+                db.add(
+                    User(
+                        email=admin_email,
+                        full_name="Administrator",
+                        password_hash=hash_password(admin_password),
+                        role="superadmin",
+                    )
+                )
+            db.commit()
+
+
 def init_db() -> None:
     from app import models  # noqa: F401  (registers tables on Base)
 
@@ -58,6 +87,7 @@ def init_db() -> None:
     _add_missing_columns()
     from app.services.audit import install_guards
     install_guards(engine)
+    _ensure_default_admin()
 
 
 def get_session_factory() -> sessionmaker:
