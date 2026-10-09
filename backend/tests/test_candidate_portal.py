@@ -62,6 +62,43 @@ def test_public_jobs_and_private_access(api, session_factory):
     assert client.post("/api/candidates/apply-job", headers=headers).status_code == 403
 
 
+def test_only_one_active_resume_and_replacement_preserves_applications(api, session_factory):
+    client, _ = api()
+    headers = account(client)
+    resume = upload(client, headers)
+    application = apply(client, headers, job(session_factory), resume)
+    duplicate = client.post("/api/portal/resumes", headers=headers, files={"file": ("new.txt", RESUME)})
+    assert duplicate.status_code == 409
+    assert [r["id"] for r in client.get("/api/portal/resumes", headers=headers).json()] == [resume]
+    other = account(client, "another@example.com")
+    assert upload(client, other) != resume
+    assert client.delete(f"/api/portal/resumes/{resume}", headers=other).status_code == 404
+    assert client.delete(f"/api/portal/resumes/{resume}", headers=headers).status_code == 204
+    replacement = upload(client, headers)
+    assert replacement != resume
+    assert [r["id"] for r in client.get("/api/portal/resumes", headers=headers).json()] == [replacement]
+    assert client.get(f"/api/portal/applications/{application}", headers=headers).json()["resume_id"] == resume
+    assert client.get(f"/api/portal/resumes/{resume}/download", headers=headers).content == RESUME
+
+
+def test_simultaneous_resume_uploads_create_only_one_active_resume(api):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    client, _ = api()
+    headers = account(client)
+    barrier = Barrier(2)
+
+    def send():
+        barrier.wait(timeout=5)
+        return client.post("/api/portal/resumes", headers=headers, files={"file": ("resume.txt", RESUME)}).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(send) for _ in range(2)]
+        assert sorted(f.result(timeout=15) for f in futures) == [201, 409]
+    assert len(client.get("/api/portal/resumes", headers=headers).json()) == 1
+
+
 def test_profile_and_resume_ownership(api):
     client, _ = api()
     first = account(client)

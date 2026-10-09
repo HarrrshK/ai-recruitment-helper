@@ -145,6 +145,11 @@ def upload_resume(file: UploadFile, user: User = Depends(require_candidate), db:
         text = extract_resume_text(filename, content)
     except ResumeFileError as exc:
         raise HTTPException(422, str(exc)) from exc
+    # Serialize uploads for this account, including on SQLite where FOR UPDATE is ignored.
+    db.execute(update(User).where(User.id == user.id).values(id=User.id))
+    if db.scalar(select(Resume.id).where(Resume.user_id == user.id, Resume.archived.is_(False)).limit(1)):
+        db.rollback()
+        raise HTTPException(409, "You already have an active resume. Remove it before uploading a replacement; submitted applications keep their original document.")
     resume = Resume(user_id=user.id, filename=filename, content=content, text=text)
     db.add(resume)
     db.commit()

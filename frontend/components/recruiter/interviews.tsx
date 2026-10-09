@@ -17,7 +17,26 @@ export function RecruiterInterviews() {
   const query = useFetch<HiringInterview[]>("/api/recruiter/interviews");
   const [status, setStatus] = useState("all");
   const [search, setSearch] = useState("");
-  return <><PortalHeading title="Interviews" description="Schedules, question sets and feedback for your applicants." /><div className="mb-6 flex flex-wrap gap-3 border-y py-5"><Input aria-label="Search interviews" placeholder="Search candidate or job" value={search} onChange={e => setSearch(e.target.value)} className="min-w-48 flex-1" /><select aria-label="Interview status filter" className={selectClass} value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option>{Object.entries(interviewStatuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div><LoadView {...query}>{rows => <InterviewRows interviews={rows.filter(i => (status === "all" || i.status === status) && `${i.candidate_name} ${i.job_title}`.toLowerCase().includes(search.toLowerCase()))} />}</LoadView></>;
+  const [view, setView] = useState("agenda");
+  return <><PortalHeading title="Interviews" description="Schedules, question sets and feedback for your applicants." action={<Link href="/recruiter/applicants?status=shortlisted" className={buttonVariants({ variant: "outline" })}><Plus className="size-4" />Schedule interview</Link>} />
+    <div className="mb-6 flex flex-wrap gap-3 border-y py-5"><Input aria-label="Search interviews" placeholder="Search candidate or job" value={search} onChange={e => setSearch(e.target.value)} className="min-w-48 flex-1" /><select aria-label="Interview status filter" className={selectClass} value={status} onChange={e => setStatus(e.target.value)}><option value="all">All statuses</option>{Object.entries(interviewStatuses).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select><div role="group" aria-label="Interview view" className="flex gap-1">{[["agenda", "Agenda"], ["feedback", "Awaiting feedback"], ["all", "All interviews"]].map(([value, label]) => <Button key={value} variant={view === value ? "secondary" : "ghost"} aria-pressed={view === value} onClick={() => setView(value)}>{label}</Button>)}</div></div>
+    <LoadView {...query}>{rows => {
+      const filtered = rows.filter(i => (status === "all" || i.status === status) && `${i.candidate_name} ${i.job_title}`.toLowerCase().includes(search.trim().toLowerCase()));
+      const feedback = filtered.filter(i => i.status === "completed" && !i.feedback);
+      if (view === "feedback") return <section><h2 className="mb-4 text-sm font-semibold">Awaiting feedback ({feedback.length})</h2>{feedback.length ? <InterviewRows interviews={feedback} /> : <p className="py-8 text-sm text-muted-foreground">No completed interviews are awaiting feedback.</p>}</section>;
+      if (view === "all") return <InterviewRows interviews={filtered} />;
+      const agenda = filtered.filter(i => ["planned", "scheduled"].includes(i.status)).sort((a, b) => interviewTime(a.scheduled_at) - interviewTime(b.scheduled_at) || a.id - b.id);
+      const days = new Map<string, HiringInterview[]>();
+      for (const interview of agenda) {
+        const label = interview.scheduled_at ? new Date(interviewTime(interview.scheduled_at)).toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "short", day: "numeric" }) : "Not yet scheduled";
+        days.set(label, [...(days.get(label) || []), interview]);
+      }
+      return <>{feedback.length > 0 && <button onClick={() => setView("feedback")} className="mb-6 flex w-full items-center justify-between gap-3 border-l-2 border-amber-500 bg-muted p-4 text-left text-sm"><span>{feedback.length} completed interviews awaiting feedback</span><ArrowRight className="size-4 shrink-0" /></button>}{!agenda.length ? <p className="py-10 text-sm text-muted-foreground">No planned or scheduled interviews match this view.</p> : [...days].map(([day, interviews]) => <section key={day} className="mb-8"><div className="mb-3 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">{day}</h2><span className="text-xs text-muted-foreground">{interviews.length} interviews</span></div><InterviewRows interviews={interviews} /></section>)}</>;
+    }}</LoadView>
+  </>;
+}
+function interviewTime(value: string | null) {
+  return value ? new Date(/Z$|[+-]\d\d:\d\d$/.test(value) ? value : `${value}Z`).getTime() : Infinity;
 }
 function InterviewRows({ interviews }: { interviews: HiringInterview[] }) {
   return !interviews.length ? <p className="border-t py-12 text-sm text-muted-foreground">No interviews in this view. Open an applicant to arrange an interview.</p> : <div className="divide-y border-t">{interviews.map(i => <Link key={i.id} href={`/recruiter/interviews/${i.id}`} className="grid items-center gap-4 py-5 sm:grid-cols-[minmax(0,1fr)_minmax(140px,220px)_100px_20px]"><div className="min-w-0"><h2 className="font-semibold">{i.candidate_name}</h2><p className="mt-1 text-sm text-muted-foreground">{i.job_title} · {i.title}</p></div><div><p className="text-sm">{formatDateTime(i.scheduled_at)}</p><p className="mt-1 text-xs text-muted-foreground">{i.interviewer || "Interviewer not assigned"}</p></div><div><span className="rounded-md bg-muted px-2 py-1 text-xs">{interviewStatuses[i.status]}</span><p className="mt-2 text-xs text-muted-foreground">{i.feedback ? "Feedback saved" : "No feedback"}</p></div><ArrowRight className="size-4" /></Link>)}</div>;
