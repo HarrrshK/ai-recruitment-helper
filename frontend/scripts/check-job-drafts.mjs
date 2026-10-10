@@ -32,6 +32,10 @@ try {
   await page.goto(`${base}/recruiter/jobs/new`);
   await page.getByLabel("Job title", { exact: true }).fill("Manual Engineer");
   await page.getByLabel("Job description", { exact: true }).fill("Written entirely by the recruiter.");
+  await page.getByLabel("Project expectations (optional, one per line)").fill("Build APIs");
+  await page.getByLabel("Number of openings", { exact: true }).fill("3");
+  await page.getByLabel("Minimum annual salary", { exact: true }).fill("500000");
+  await page.getByLabel("Maximum annual salary", { exact: true }).fill("900000");
   await page.locator("#weight-projects").fill("10");
   assert.equal(await page.getByRole("button", { name: "Save draft", exact: true }).isEnabled(), false);
   await page.locator("#weight-skills").fill("20");
@@ -41,8 +45,11 @@ try {
   assert.equal(saves[0].body.markdown, "Written entirely by the recruiter.");
   assert.equal(saves[0].body.matching_rules.projects, 0.1);
   assert.equal(saves[0].body.matching_rules.skills, 0.2);
+  assert.equal(saves[0].body.openings, 3);
+  assert.equal(saves[0].body.salary_min, 500000);
   await page.goto(`${base}/recruiter/jobs/new`);
-  await page.getByRole("button", { name: "Draft with Ollama", exact: true }).click();
+  await page.getByRole("button", { name: "Draft with AI", exact: true }).click();
+  await page.getByLabel("AI provider", { exact: true }).selectOption("groq");
   await page.getByRole("button", { name: "Generate draft", exact: true }).click();
   await page.getByRole("alert").getByText("Add a job title with at least two characters.").waitFor();
   await page.getByLabel("Job title", { exact: true }).fill("Backend Engineer");
@@ -60,12 +67,13 @@ try {
   fail = false;
   await page.getByLabel("Refinement request", { exact: true }).fill("Use formal wording and prioritize API work");
   await page.getByRole("button", { name: "Generate draft", exact: true }).click();
-  await page.getByText("Ollama is preparing your draft. No job has been saved.").waitFor();
+  await page.getByText("AI is preparing your draft. No job has been saved.").waitFor();
   assert.equal(await page.getByRole("button", { name: "Publish job", exact: true }).isEnabled(), false);
   assert.equal(await page.getByLabel("Job title", { exact: true }).isEnabled(), false);
   while (!release) await new Promise(resolve => setTimeout(resolve, 10));
   release(); release = undefined;
   assert.equal(generations.at(-1).refinement, "Use formal wording and prioritize API work");
+  assert.equal(generations.at(-1).provider, "groq");
   await page.getByLabel("About the role", { exact: true }).fill("Recruiter-edited overview.");
   assert.equal(saves.length, 1);
   await page.screenshot({ path: "/tmp/job-draft-desktop.png", fullPage: true });

@@ -91,12 +91,14 @@ def assess_skills(must: list[str], nice: list[str], profile: _HasExperience) -> 
         listed[name] = listed.get(name, True) and basic  # basic only if every mention is marked basic
 
     details: list[SkillDetail] = []
+    seen = set()
     credits: dict[Kind, list[float]] = {"must": [], "nice": []}
     for kind, skills in (("must", must), ("nice", nice)):
         for raw in skills:
             name, _ = normalize_skill(raw)
-            if not name:
+            if not name or name in seen:
                 continue
+            seen.add(name)
             if mentions(proven, name):
                 status: Status = "demonstrated"
                 credit = CREDIT[status]

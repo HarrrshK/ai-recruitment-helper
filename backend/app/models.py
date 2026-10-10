@@ -347,6 +347,7 @@ class HiringInterview(Base):
     title: Mapped[str] = mapped_column(String(200), default="Technical interview")
     interviewer: Mapped[str] = mapped_column(String(200), default="")
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    duration_minutes: Mapped[int | None] = mapped_column(Integer, default=60)
     location: Mapped[str] = mapped_column(String(500), default="")
     status: Mapped[str] = mapped_column(String(30), default="planned")
     questions: Mapped[list | None] = mapped_column(JSON, default=None)

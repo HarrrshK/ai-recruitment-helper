@@ -1,11 +1,9 @@
 """Validated job-level weights and deterministic, explicitly scoped signals."""
 import math
 
-from app.services.resume_sections import resume_sections
-from app.services.skills import mentions, normalize_skill
-
 DEFAULT_WEIGHTS = {"skills": 0.30, "semantic": 0.10, "experience": 0.20, "ai_review": 0.40,
-                   "eligibility": 0.0, "projects": 0.0}
+                   "eligibility": 0.0, "projects": 0.0, "education": 0.0}
+SCORING_VERSION = "requirements-v2"
 
 
 def validate_weights(value):
@@ -19,20 +17,6 @@ def validate_weights(value):
     if not math.isclose(sum(weights.values()), 1, abs_tol=0.000001):
         raise ValueError("Matching weights must total 100%")
     return weights
-
-
-def additional_signals(requirements, profile, text):
-    # Eligibility here is only stated required skills and years, not education or legal eligibility.
-    checks = [float(any(mentions(s.casefold(), normalize_skill(skill)[0]) for s in profile.skills))
-              for skill in requirements.must_have_skills]
-    if requirements.min_years_experience > 0:
-        checks.append(float(profile.total_years_experience >= requirements.min_years_experience))
-    project_text = "\n".join(resume_sections(text)["projects"]).casefold()
-    skills = requirements.must_have_skills + requirements.nice_to_have_skills
-    projects = (round(100 * sum(mentions(project_text, normalize_skill(s)[0]) for s in skills) / len(skills), 1)
-                if skills else None)
-    return {"eligibility": round(100 * sum(checks) / len(checks), 1) if checks else None,
-            "projects": projects}
 
 
 def improvement_steps(assessment):

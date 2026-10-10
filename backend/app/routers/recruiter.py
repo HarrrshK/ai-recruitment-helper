@@ -4,7 +4,7 @@ from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,7 @@ from app.db import get_db, get_session_factory
 from app.llm.job_drafts import job_draft_client
 from app.llm.client import LLMError
 from app.llm.client import LLMClient, get_llm
-from app.models import Application, CandidateProfile, HiringInterview, Job, Resume, User
+from app.models import Application, CandidateProfile, CompanyInvite, HiringInterview, Job, Resume, User
 from app.routers.portal import application_out, change_status, owned_application
 from app.services.anonymizer import anonymize_resume
 from app.services.workspaces import company_for, company_job, consume_invite, owned_jobs, invite_permissions
@@ -121,6 +121,71 @@ def join_company(body: InviteIn, user: User = Depends(require_recruiter), db: Se
     return company_out(company_for(db, account))
 
 
+class TeamAccessIn(BaseModel):
+    permissions: list[str] = Field(max_length=10)
+
+
+class TeamInviteIn(TeamAccessIn):
+    email: str = Field(min_length=3, max_length=200, pattern=r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+    days: int = Field(default=7, ge=1, le=30)
+
+
+def team_manager(db, user, permissions=None):
+    from app.services.permissions import permissions_for, RECRUITER_PERMISSIONS
+    check_permission(user, "company.edit")
+    company_for(db, user)
+    if permissions is not None and (set(permissions) - set(RECRUITER_PERMISSIONS) or set(permissions) - set(permissions_for(user))):
+        raise HTTPException(403, "You can only delegate permissions you hold")
+
+
+@router.get("/company/team")
+def team(user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    from app.services.permissions import permissions_for
+    team_manager(db, user)
+    return {"members": [{"id": member.id, "name": member.full_name, "email": member.email, "permissions": permissions_for(member)}
+                        for member in db.scalars(select(User).where(User.company_id == user.company_id, User.role == "recruiter"))],
+            "invites": [{"id": invite.id, "email": invite.email, "expires_at": invite.expires_at, "accepted_at": invite.accepted_at,
+                         "permissions": invite.permissions} for invite in db.scalars(select(CompanyInvite).where(CompanyInvite.company_id == user.company_id))]}
+
+
+@router.post("/company/team/invites", status_code=201)
+def invite_member(body: TeamInviteIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    from app.services.workspaces import issue_invite
+    team_manager(db, user, body.permissions)
+    code = issue_invite(db, user.company_id, body.email, body.days, list(set(body.permissions)))
+    record(db, user, "company.invite_member", user.company_id, {"email": body.email, "permissions": body.permissions})
+    db.commit()
+    return {"code": code}
+
+
+@router.put("/company/team/{member_id}/permissions")
+def member_permissions(member_id: int, body: TeamAccessIn, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    from app.services.permissions import permissions_for
+    team_manager(db, user, body.permissions)
+    member = db.get(User, member_id)
+    if not member or member.company_id != user.company_id or member.role != "recruiter":
+        raise HTTPException(404, "Team member not found")
+    if member.id == user.id or set(permissions_for(member)) - set(permissions_for(user)):
+        raise HTTPException(403, "Ask a platform administrator to change this account")
+    member.permissions = list(set(body.permissions))
+    record(db, user, "company.member_permissions", member.id, {"permissions": member.permissions})
+    db.commit()
+    return {"permissions": member.permissions}
+
+
+@router.delete("/company/team/invites/{invite_id}", status_code=204)
+def revoke_team_invite(invite_id: int, user: User = Depends(require_recruiter), db: Session = Depends(get_db)):
+    team_manager(db, user)
+    invite = db.get(CompanyInvite, invite_id)
+    if not invite or invite.company_id != user.company_id:
+        raise HTTPException(404, "Invitation not found")
+    if invite.accepted_at:
+        raise HTTPException(409, "Invitation already accepted")
+    invite.expires_at = datetime.now(UTC)
+    record(db, user, "company.invite_revoked", invite.id)
+    db.commit()
+
+
 class JobIn(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     brief: str = Field(default="", max_length=3000)
@@ -131,6 +196,26 @@ class JobIn(BaseModel):
     requirements: JobRequirements
     status: Literal["draft", "ready", "closed"] = "draft"
     matching_rules: dict[str, float] | None = None
+    deadline: datetime | None = None
+    openings: int | None = Field(default=None, ge=1, le=10000)
+    salary_min: float | None = Field(default=None, ge=0, le=1000000000, allow_inf_nan=False)
+    salary_max: float | None = Field(default=None, ge=0, le=1000000000, allow_inf_nan=False)
+    salary_currency: Literal["INR", "USD", "EUR", "GBP", "CAD", "AUD"] = "INR"
+
+    @model_validator(mode="after")
+    def valid_terms(self):
+        if self.salary_min is not None and self.salary_max is not None and self.salary_min > self.salary_max:
+            raise ValueError("Minimum salary cannot exceed maximum salary")
+        if self.deadline and self.deadline.tzinfo is None:
+            raise ValueError("Deadline must include a timezone")
+        if self.matching_rules:
+            if self.matching_rules.get("eligibility", 0):
+                raise ValueError("Mandatory requirements are separate checks, not weighted scoring criteria")
+            if self.matching_rules.get("education", 0) and not self.requirements.education:
+                raise ValueError("Specify an education requirement before assigning education weight")
+            if self.matching_rules.get("projects", 0) and not self.requirements.project_expectations:
+                raise ValueError("Specify project expectations before assigning project weight")
+        return self
 
     @field_validator("matching_rules")
     @classmethod
@@ -161,7 +246,7 @@ class JobIn(BaseModel):
 def job_out(db: Session, job: Job):
     description = job.description or {}
     applications = list(db.scalars(select(Application).where(Application.job_id == job.id)))
-    return {"id": job.id, "title": job.title, "brief": job.brief, "status": job.status,
+    return {**description.get("terms", {}), "id": job.id, "title": job.title, "brief": job.brief, "status": job.status,
             "markdown": description.get("markdown", ""), "requirements": description.get("requirements"),
             "location": job.location or "", "work_mode": job.work_mode or "onsite",
             "employment_type": job.employment_type or "full_time", "revision": job.revision or 1,
@@ -174,11 +259,13 @@ def write_job(db: Session, job: Job, body: JobIn, user: User):
     company = company_for(db, user)
     if body.status == "ready" and (not body.markdown.strip() or not company.name.strip()):
         raise HTTPException(422, "Add a company name and job description before publishing")
-    description = {"markdown": body.markdown, "requirements": body.requirements.model_dump()}
+    term_keys = {"deadline", "openings", "salary_min", "salary_max", "salary_currency"}
+    description = {"markdown": body.markdown, "requirements": body.requirements.model_dump(),
+                   "terms": body.model_dump(mode="json", include=term_keys)}
     if job.id and (job.title != body.title or job.description != description or
                    (body.matching_rules is not None and job.matching_rules != body.matching_rules)):
         job.revision = (job.revision or 1) + 1
-    for key, value in body.model_dump(exclude={"markdown", "requirements", "matching_rules"}).items():
+    for key, value in body.model_dump(exclude={"markdown", "requirements", "matching_rules"} | term_keys).items():
         setattr(job, key, value)
     if body.matching_rules is not None:
         job.matching_rules = body.matching_rules
@@ -261,6 +348,7 @@ def applicant(application_id: int, user: User = Depends(require_recruiter), db: 
 
 class GenerateJobIn(JobIn):
     refinement: str = Field(default="", max_length=1000)
+    provider: Literal["configured", "groq", "ollama"] = "configured"
     @field_validator("requirements")
     @classmethod
     def bounded_draft(cls, value):
@@ -279,11 +367,16 @@ def generate_job(body: GenerateJobIn, user: User = Depends(require_recruiter),
     if "jobs.create" not in (user.permissions or []) and "jobs.edit" not in (user.permissions or []):
         check_permission(user, "jobs.create")
     company_for(db, user)
-    llm = job_draft_client(session_factory)
+    from app.llm.job_drafts import configured_draft_client
+    llm = job_draft_client(session_factory) if body.provider == "ollama" else configured_draft_client(session_factory, body.provider)
     try:
-        return generate_draft(body, llm)
+        result = generate_draft(body, llm)
+        result.provider = body.provider
+        return result
     except LLMError as exc:
-        raise HTTPException(502, "Ollama could not produce a valid job draft. Retry or continue manually.") from exc
+        if "request rejected (401)" in str(exc):
+            raise HTTPException(502, "The AI provider rejected its configured API key. Ask a platform administrator to update the provider credentials, or choose another provider. Your inputs are preserved.") from exc
+        raise HTTPException(502, "The selected AI provider could not produce a valid draft. Retry, choose another provider, or continue manually; your inputs are preserved.") from exc
 
 
 @router.get("/applicants/{application_id}/resume")
@@ -297,6 +390,7 @@ class InterviewIn(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     interviewer: str = Field(default="", max_length=200)
     scheduled_at: datetime | None = None
+    duration_minutes: int = Field(default=60, ge=5, le=480)
     location: str = Field(default="", max_length=500)
     status: Literal["planned", "scheduled", "in_progress", "completed", "cancelled"] = "planned"
 
@@ -314,7 +408,7 @@ class FeedbackIn(BaseModel):
 def interview_out(db: Session, interview: HiringInterview):
     application = db.get(Application, interview.application_id)
     owner = db.get(User, application.user_id)
-    return {"id": interview.id, "application_id": application.id, "job_id": application.job_id,
+    return {"duration_minutes": interview.duration_minutes or 60, "id": interview.id, "application_id": application.id, "job_id": application.job_id,
             "job_title": application.job_title, "candidate_name": owner.full_name,
             **{key: getattr(interview, key) for key in ("title", "interviewer", "scheduled_at", "location", "status", "questions", "feedback", "candidate_feedback", "created_at", "updated_at")}}
 
@@ -338,10 +432,17 @@ def write_interview(db: Session, interview: HiringInterview, body: InterviewIn, 
         raise HTTPException(422, "A scheduled interview needs a date and time")
     if body.scheduled_at and body.scheduled_at.tzinfo is None:
         raise HTTPException(422, "Include a timezone with the interview time")
+    if body.scheduled_at:
+        body.scheduled_at = body.scheduled_at.astimezone(UTC)
     changed = not interview.id or any(getattr(interview, key) != value for key, value in body.model_dump().items())
     for key, value in body.model_dump().items():
         setattr(interview, key, value)
     interview.updated_at = datetime.now(UTC)
+    db.add(interview)
+    db.flush()
+    record(db, user, "interview.schedule_update", interview.id,
+           {"status": body.status, "scheduled_at": body.scheduled_at.isoformat() if body.scheduled_at else None,
+            "duration_minutes": body.duration_minutes})
     if changed and body.status in ("scheduled", "in_progress", "completed", "cancelled"):
         note = f"{body.title}: {body.status.replace('_', ' ')}"
         if body.scheduled_at and body.status == "scheduled":

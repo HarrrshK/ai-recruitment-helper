@@ -14,11 +14,12 @@ from tests.test_candidate_portal import account
 
 
 INPUT = {
+    "provider": "ollama",
     "title": "Backend Engineer", "brief": "Build our API", "location": "Bengaluru",
     "work_mode": "hybrid", "employment_type": "contract",
     "requirements": {"must_have_skills": ["Python", "SQL"], "nice_to_have_skills": ["Docker"],
                      "min_years_experience": 2, "education": "Equivalent experience accepted",
-                     "responsibilities": ["Build APIs", "Review code"]},
+                     "responsibilities": ["Build APIs", "Review code"], "project_expectations": [], "mandatory_requirements": []},
 }
 PLAN = {"tone": "inviting", "required": [1, 0], "preferred": [0], "responsibilities": [0, 1]}
 

@@ -3,6 +3,7 @@ import type { Requirements } from "@/lib/types";
 
 export type Company = { id: number; name: string; industry: string; website: string; location: string; size: string; about: string; contact_email: string };
 export type RecruiterJob = {
+  deadline?: string | null; openings?: number | null; salary_min?: number | null; salary_max?: number | null; salary_currency?: string;
   id: number; title: string; brief: string; markdown: string; requirements: Requirements | null;
   status: "draft" | "ready" | "closed"; location: string; work_mode: string; employment_type: string;
   revision: number; applicants: number; shortlisted: number; created_at: string;
@@ -13,6 +14,7 @@ export type ApplicantDetail = Applicant & { email: string; resume_text: string; 
 export type Question = { id: number; text: string; competency: string; difficulty: string; good_answer_signals: string[] };
 export type Feedback = { technical: number; problem_solving: number; communication: number; role_fit: number; recommendation: "hire" | "hold" | "reject"; notes: string; author?: string; recorded_at?: string };
 export type HiringInterview = {
+  duration_minutes?: number;
   id: number; application_id: number; job_id: number; job_title: string; candidate_name: string;
   title: string; interviewer: string; scheduled_at: string | null; location: string;
   status: "planned" | "scheduled" | "in_progress" | "completed" | "cancelled";

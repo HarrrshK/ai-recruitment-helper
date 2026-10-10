@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.llm.client import LLMClient
 from app.prompts import load_prompt
@@ -12,6 +12,26 @@ class JobRequirements(BaseModel):
     min_years_experience: int = 0
     education: str | None = None
     responsibilities: list[str] = Field(default_factory=list)
+    project_expectations: list[str] = Field(default_factory=list, max_length=30)
+    mandatory_requirements: list[str] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def normalize_requirements(self):
+        from app.services.skills import normalize_skill
+        seen = set()
+        for key in ("must_have_skills", "nice_to_have_skills"):
+            result = []
+            for skill in getattr(self, key):
+                canonical, _ = normalize_skill(skill)
+                if canonical not in seen:
+                    seen.add(canonical)
+                    result.append(skill.strip())
+            setattr(self, key, result)
+        for item in self.project_expectations + self.mandatory_requirements:
+            if not item.strip() or len(item) > 1000:
+                raise ValueError("Requirements must contain 1-1000 characters")
+        self.education = self.education.strip() if self.education and self.education.strip() else None
+        return self
 
 
 def stream_jd(title: str, brief: str, llm: LLMClient) -> Iterator[str]:

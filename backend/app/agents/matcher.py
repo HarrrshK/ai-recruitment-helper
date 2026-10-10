@@ -25,7 +25,8 @@ from app.prompts import load_prompt
 from app.services.anonymizer import anonymize_resume
 from app.services.embeddings import Embedder, semantic_score
 from app.services.skills import SkillDetail, assess_skills
-from app.services.matching_policy import DEFAULT_WEIGHTS, additional_signals
+from app.services.matching_policy import DEFAULT_WEIGHTS
+from app.services.resume_sections import resume_sections
 
 # Blend weights, fixed in advance. A component that cannot be computed is dropped and the rest renormalised.
 WEIGHTS = {key: value for key, value in DEFAULT_WEIGHTS.items() if value > 0}
@@ -67,6 +68,7 @@ class MatchResult:
     dropped_quotes: int
     reviewed_text: str  # exactly what the LLM saw
     review_scores: dict[str, float] = field(default_factory=dict)
+    eligibility_checks: list[dict] = field(default_factory=list)
 
 
 def _canon(text: str) -> str:
@@ -116,7 +118,7 @@ def _years_score(years: float, minimum: int) -> float | None:
 def _review(job_title: str, req: JobRequirements, years: float, text: str, llm: LLMClient) -> tuple[ReviewOutput, int]:
     """Ask for the review, and re-ask once if it cites quotes that are not in the resume."""
     messages = [
-        {"role": "system", "content": load_prompt("matcher") + "\n\n" + UNTRUSTED_RULE.format(tag="resume")},
+        {"role": "system", "content": load_prompt("matcher") + "\n\nScore only the supplied job requirements. Never penalize education, projects, technologies, certifications or experience minima that the recruiter did not specify. Preferred skills are bonuses, not mandatory requirements.\n\n" + UNTRUSTED_RULE.format(tag="resume")},
         {
             "role": "user",
             "content": (
@@ -182,9 +184,12 @@ def match_candidate(
     experience = None if years is None else round(years * review.experience_score / 100, 1)
 
     components = {"skills": skills, "semantic": semantic, "experience": experience, "ai_review": ai_review}
-    if custom_weights:
-        components.update({key: value for key, value in additional_signals(requirements, profile, resume_text).items()
-                           if custom_weights.get(key, 0) > 0})
+    if custom_weights and custom_weights.get("projects", 0) > 0:
+        projects = resume_sections(resume_text)["projects"]
+        components["projects"] = (semantic_score(embedder, " ".join(requirements.project_expectations), projects) if projects else 0) if requirements.project_expectations else None
+    if custom_weights and custom_weights.get("education", 0) > 0:
+        education = [item.degree for item in profile.education]
+        components["education"] = (semantic_score(embedder, requirements.education, education) if education else 0) if requirements.education else None
     return MatchResult(
         overall_score=_blend(components, custom_weights),
         breakdown=components,
@@ -197,4 +202,7 @@ def match_candidate(
         dropped_quotes=dropped,
         reviewed_text=text,
         review_scores=review_scores,
+        eligibility_checks=[{"requirement": item, "status": "requires_verification",
+                             "note": "Recruiter verification required; this requirement is not blended into the match score."}
+                            for item in requirements.mandatory_requirements],
     )

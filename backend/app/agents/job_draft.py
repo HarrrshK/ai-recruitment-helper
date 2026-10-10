@@ -20,11 +20,11 @@ class JobDraft(BaseModel):
     sections: list[DraftSection]
     requirements: JobRequirements
     generated_wording: str
-    provider: Literal["ollama"] = "ollama"
+    provider: str = "configured"
 
 
 def generate_draft(body, llm: LLMClient) -> JobDraft:
-    facts = body.model_dump(exclude={"markdown", "status", "matching_rules", "refinement"})
+    facts = body.model_dump(exclude={"markdown", "status", "matching_rules", "refinement", "provider"}, mode="json")
     requirements = body.requirements
     lists = {"required": requirements.must_have_skills,
              "preferred": requirements.nice_to_have_skills,
@@ -79,6 +79,16 @@ def generate_draft(body, llm: LLMClient) -> JobDraft:
         section(key, heading, "\n".join(f"- {lists[key][index]}" for index in getattr(plan, key)), [f"requirements.{field}"])
     section("experience", "Experience", f"Minimum experience: {requirements.min_years_experience} years", ["requirements.min_years_experience"])
     section("education", "Education", requirements.education, ["requirements.education"])
+    section("projects", "Project expectations", "\n".join(f"- {item}" for item in requirements.project_expectations), ["requirements.project_expectations"])
+    section("mandatory", "Mandatory requirements", "\n".join(f"- {item}" for item in requirements.mandatory_requirements), ["requirements.mandatory_requirements"])
+    terms = []
+    if body.deadline:
+        terms.append(f"Application deadline: {body.deadline.isoformat()}")
+    if body.openings is not None:
+        terms.append(f"Openings: {body.openings}")
+    if body.salary_min is not None or body.salary_max is not None:
+        terms.append(f"Annual salary ({body.salary_currency}): minimum {body.salary_min if body.salary_min is not None else 'not specified'}, maximum {body.salary_max if body.salary_max is not None else 'not specified'}")
+    section("terms", "Application details", "\n".join(terms), ["deadline", "openings", "salary_min", "salary_max", "salary_currency"])
     markdown = "\n\n".join(f"## {item.heading}\n{item.body}" for item in sections)
     return JobDraft(markdown=markdown, sections=sections, requirements=requirements,
-                    generated_wording=wording)
+                    generated_wording=wording, provider=body.provider)

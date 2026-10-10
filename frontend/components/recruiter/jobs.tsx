@@ -45,6 +45,10 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
   const [nice, setNice] = useState(initial?.requirements?.nice_to_have_skills.join(", ") || "");
   const [years, setYears] = useState(initial?.requirements?.min_years_experience ?? 0);
   const [education, setEducation] = useState(initial?.requirements?.education || "");
+  const [projects, setProjects] = useState(initial?.requirements?.project_expectations?.join("\n") || "");
+  const [mandatory, setMandatory] = useState(initial?.requirements?.mandatory_requirements?.join("\n") || "");
+  const [terms, setTerms] = useState({ deadline: initial?.deadline ? new Date(new Date(initial.deadline).getTime() - new Date(initial.deadline).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : "", openings: initial?.openings?.toString() || "", salary_min: initial?.salary_min?.toString() || "", salary_max: initial?.salary_max?.toString() || "", salary_currency: initial?.salary_currency || "INR" });
+  const [provider, setProvider] = useState("configured");
   const [duties, setDuties] = useState(initial?.requirements?.responsibilities.join("\n") || "");
   const [status, setStatus] = useState(initial?.status || "draft");
   const [weights, setWeights] = useState<Record<string, number>>(() => Object.fromEntries(Object.entries(defaultWeights).map(([key, value]) => [key, initial?.matching_rules?.[key] !== undefined ? Math.round(initial.matching_rules[key] * 100) : value])));
@@ -58,8 +62,8 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
   const [draftSource, setDraftSource] = useState("");
   const [reviewedSource, setReviewedSource] = useState("");
   const split = (value: string) => [...new Set(value.split(",").map(s => s.trim()).filter(Boolean))];
-  const inputs = { title: form.title, brief: form.brief, location: form.location, work_mode: form.work_mode, employment_type: form.employment_type,
-    requirements: { must_have_skills: split(must), nice_to_have_skills: split(nice), min_years_experience: years, education: education || null, responsibilities: duties.split("\n").map(s => s.trim()).filter(Boolean) } };
+  const inputs = { deadline: terms.deadline ? new Date(terms.deadline).toISOString() : null, openings: terms.openings ? Number(terms.openings) : null, salary_min: terms.salary_min ? Number(terms.salary_min) : null, salary_max: terms.salary_max ? Number(terms.salary_max) : null, salary_currency: terms.salary_currency, title: form.title, brief: form.brief, location: form.location, work_mode: form.work_mode, employment_type: form.employment_type,
+    requirements: { project_expectations: projects.split("\n").map(s => s.trim()).filter(Boolean), mandatory_requirements: mandatory.split("\n").map(s => s.trim()).filter(Boolean), must_have_skills: split(must), nice_to_have_skills: split(nice), min_years_experience: years, education: education || null, responsibilities: duties.split("\n").map(s => s.trim()).filter(Boolean) } };
   const source = JSON.stringify(inputs);
   const stale = generated ? draftSource !== source : Boolean(reviewedSource && reviewedSource !== source);
   const reviewPending = mode === "ai" && (Boolean(generated) || !reviewedSource || stale);
@@ -79,7 +83,7 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
     if (generated && !window.confirm("Replace the current AI draft, including your section edits? The job description below will be preserved until you use the new draft.")) return;
     setGenerationError("");
     setGenerating(true);
-    try { setGenerated(await postJson<NonNullable<typeof generated>>("/api/recruiter/jobs/generate", { ...inputs, refinement })); setDraftSource(source); }
+    try { setGenerated(await postJson<NonNullable<typeof generated>>("/api/recruiter/jobs/generate", { ...inputs, refinement, provider })); setDraftSource(source); }
     catch (error) { setGenerationError((error as Error).message); }
     finally { setGenerating(false); }
   }
@@ -95,7 +99,7 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
     <form onSubmit={save} className="space-y-8">
       <div role="group" aria-label="Description creation mode" className="inline-flex flex-wrap gap-1 rounded-md border bg-muted p-1">
         <Button type="button" variant={mode === "manual" ? "secondary" : "ghost"} aria-pressed={mode === "manual"} disabled={generating || busy} onClick={() => { setMode("manual"); setGenerated(null); setGenerationError(""); }}><Pencil className="size-4" />Write manually</Button>
-        <Button type="button" variant={mode === "ai" ? "secondary" : "ghost"} aria-pressed={mode === "ai"} disabled={generating || busy} onClick={() => setMode("ai")}><Sparkles className="size-4" />Draft with Ollama</Button>
+        <Button type="button" variant={mode === "ai" ? "secondary" : "ghost"} aria-pressed={mode === "ai"} disabled={generating || busy} onClick={() => setMode("ai")}><Sparkles className="size-4" />Draft with AI</Button>
       </div>
       <div className={mode === "ai" ? "grid items-start gap-8 xl:grid-cols-2" : "max-w-4xl"}>
       <fieldset disabled={generating || busy} className="space-y-8 disabled:opacity-70">
@@ -106,6 +110,13 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
             <Field id="job-location" label="Location"><Input id="job-location" value={form.location} maxLength={200} onChange={e => setForm({ ...form, location: e.target.value })} /></Field>
             <Field id="job-mode" label="Work mode"><select id="job-mode" className={`${selectClass} w-full`} value={form.work_mode} onChange={e => setForm({ ...form, work_mode: e.target.value })}>{["onsite", "hybrid", "remote"].map(mode => <option key={mode} value={mode}>{mode[0].toUpperCase() + mode.slice(1)}</option>)}</select></Field>
             <Field id="job-type" label="Employment type"><select id="job-type" className={`${selectClass} w-full`} value={form.employment_type} onChange={e => setForm({ ...form, employment_type: e.target.value })}>{["full_time", "part_time", "contract", "internship"].map(type => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}</select></Field>
+          </div>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field id="job-deadline" label="Application deadline (local time)"><Input id="job-deadline" type="datetime-local" value={terms.deadline} onChange={e => setTerms({ ...terms, deadline: e.target.value })} /></Field>
+            <Field id="job-openings" label="Number of openings"><Input id="job-openings" type="number" min={1} max={10000} value={terms.openings} onChange={e => setTerms({ ...terms, openings: e.target.value })} /></Field>
+            <Field id="salary-min" label="Minimum annual salary"><Input id="salary-min" type="number" min={0} step="0.01" value={terms.salary_min} onChange={e => setTerms({ ...terms, salary_min: e.target.value })} /></Field>
+            <Field id="salary-max" label="Maximum annual salary"><Input id="salary-max" type="number" min={terms.salary_min || 0} step="0.01" value={terms.salary_max} onChange={e => setTerms({ ...terms, salary_max: e.target.value })} /></Field>
+            <Field id="salary-currency" label="Salary currency"><select id="salary-currency" className={selectClass} value={terms.salary_currency} onChange={e => setTerms({ ...terms, salary_currency: e.target.value })}>{["INR", "USD", "EUR", "GBP", "CAD", "AUD"].map(code => <option key={code}>{code}</option>)}</select></Field>
           </div>
           <Field id="job-summary" label="Short summary"><Textarea id="job-summary" rows={2} maxLength={3000} value={form.brief} onChange={e => setForm({ ...form, brief: e.target.value })} /></Field>
         </section>
@@ -118,15 +129,19 @@ function JobForm({ initial }: { initial?: RecruiterJob }) {
             <Field id="minimum-years" label="Minimum experience (years)"><Input id="minimum-years" type="number" min={0} max={60} step={1} required value={years} onChange={e => setYears(Number(e.target.value))} /></Field>
             <Field id="job-education" label="Education"><Input id="job-education" maxLength={2000} value={education} onChange={e => setEducation(e.target.value)} /></Field>
           </div>
+          <Field id="project-expectations" label="Project expectations (optional, one per line)"><Textarea id="project-expectations" rows={3} value={projects} onChange={e => setProjects(e.target.value)} /></Field>
+          <Field id="mandatory-requirements" label="Mandatory requirements (one per line)"><Textarea id="mandatory-requirements" rows={3} value={mandatory} onChange={e => setMandatory(e.target.value)} /></Field>
+          <p className="text-xs text-muted-foreground">Mandatory requirements are separate verification checks, not score bonuses. Unspecified education or project expectations are not scored.</p>
           <Field id="responsibilities" label="Responsibilities (one per line)"><Textarea id="responsibilities" rows={4} maxLength={10000} value={duties} onChange={e => setDuties(e.target.value)} /></Field>
         </section>
         <MatchingWeights value={weights} onChange={setWeights} />
       </fieldset>
       {mode === "ai" && <section className="space-y-5 border-t pt-6" aria-busy={generating}>
         <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">AI draft review</h2><Button type="button" variant="outline" disabled={generating || busy} onClick={generateProfile}>{generating ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{generating ? "Generating draft..." : generated || reviewedSource ? "Regenerate draft" : "Generate draft"}</Button></div>
+        <Field id="draft-provider" label="AI provider"><select id="draft-provider" className={selectClass} value={provider} disabled={generating} onChange={e => setProvider(e.target.value)}><option value="configured">Configured provider and fallback</option><option value="groq">Groq</option><option value="ollama">Ollama (local)</option></select></Field>
         <Field id="draft-refinement" label="Refinement request"><Textarea id="draft-refinement" value={refinement} onChange={e => setRefinement(e.target.value)} maxLength={1000} disabled={generating || busy} placeholder="For example: use a formal tone and prioritize API responsibilities." rows={3} /></Field>
         <p className="text-xs text-muted-foreground">For new requirements, edit the role inputs. Refinements change wording and ordering, not the supplied facts.</p>
-        {generating && <p role="status" className="text-sm text-muted-foreground">Ollama is preparing your draft. No job has been saved.</p>}
+        {generating && <p role="status" className="text-sm text-muted-foreground">AI is preparing your draft. No job has been saved.</p>}
         {generationError && <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">{generationError}</p>}
         {stale && <p role="alert" className="text-sm text-amber-700 dark:text-amber-300">Role details changed. Regenerate the draft or continue manually before saving.</p>}
         {generated && <div className="space-y-6 border-l-2 border-primary pl-4">

@@ -10,6 +10,22 @@ from app.llm.runtime import ModelConfig, RoutingConfig, provider_settings
 from app.models import RuntimeConfig
 
 
+def configured_draft_client(session_factory, provider="configured"):
+    from app.llm.runtime import RuntimeLLM
+    if provider == "configured":
+        return RuntimeLLM(session_factory)
+    settings = Settings()
+    with session_factory() as db:
+        row = db.get(RuntimeConfig, "llm")
+        routing = RoutingConfig.model_validate(row.value) if row else None
+    model = next((item for item in (routing.primary, routing.fallback) if item and item.provider == "groq"), None) if routing else None
+    model = model or ModelConfig(provider="groq", large_model=settings.llm_model_large, small_model=settings.llm_model_small)
+    selected = provider_settings(model)
+    if not selected.llm_api_key:
+        raise HTTPException(503, "Groq credentials are not configured. Ask a platform administrator to configure Groq.")
+    return LLMClient(settings=selected, session_factory=session_factory)
+
+
 def job_draft_client(session_factory) -> LLMClient:
     settings = Settings()
     with session_factory() as db:

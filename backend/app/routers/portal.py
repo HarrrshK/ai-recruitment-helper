@@ -21,9 +21,28 @@ from app.services.embeddings import Embedder, get_embedder
 from app.services.resume_text import MAX_BYTES, ResumeFileError, extract_resume_text
 from app.services.workspaces import owned_jobs
 from app.services.permissions import check_permission
-from app.services.matching_policy import improvement_steps
+from app.services.matching_policy import improvement_steps, SCORING_VERSION
 
 router = APIRouter(prefix="/api/portal", tags=["candidate portal"])
+
+
+@router.get("/interviews/{interview_id}/calendar")
+def interview_calendar(interview_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from app.services.ics import build_ics
+    interview = db.get(HiringInterview, interview_id)
+    if not interview:
+        raise HTTPException(404, "Interview not found")
+    application = owned_application(db, interview.application_id, user)
+    if not interview.scheduled_at or interview.status in ("cancelled", "planned"):
+        raise HTTPException(409, "Only scheduled interviews have calendar invitations")
+    starts_at = interview.scheduled_at
+    if starts_at.tzinfo is None:
+        starts_at = starts_at.replace(tzinfo=UTC)
+    content = build_ics(uid=f"hiring-interview-{interview.id}@ai-recruiter", starts_at=starts_at,
+                        duration_minutes=interview.duration_minutes or 60, summary=interview.title,
+                        description=application.job_title, location=interview.location,
+                        sequence=int(interview.updated_at.replace(tzinfo=UTC).timestamp()))
+    return Response(content, media_type="text/calendar", headers={"Content-Disposition": f'attachment; filename="interview-{interview.id}.ics"'})
 
 
 def owned_application(db: Session, application_id: int, user: User) -> Application:
@@ -64,7 +83,7 @@ def change_status(application: Application, status: str, note: str):
 def public_job(job: Job, db: Session) -> dict:
     description = job.description or {}
     company = db.get(Company, job.company_id) if job.company_id else None
-    return {"id": job.id, "title": job.title, "brief": job.brief, "status": job.status,
+    return {**description.get("terms", {}), "deadline_passed": deadline_passed(job), "id": job.id, "title": job.title, "brief": job.brief, "status": job.status,
             "markdown": description.get("markdown"), "requirements": description.get("requirements"),
             "created_at": job.created_at, "company_name": company.name if company else "",
             "company_about": company.about if company else "", "location": job.location or "",
@@ -74,13 +93,18 @@ def public_job(job: Job, db: Session) -> dict:
 @router.get("/jobs")
 def jobs(q: str = "", db: Session = Depends(get_db)):
     query = select(Job).join(Company, Job.company_id == Company.id).join(User, Job.creator_id == User.id).where(Job.status == "ready", Company.active.is_not(False), User.disabled.is_not(True)).order_by(Job.id.desc())
-    return [public_job(job, db) for job in db.scalars(query) if q.lower() in f"{job.title} {job.brief} {job.description}".lower()]
+    return [public_job(job, db) for job in db.scalars(query) if not deadline_passed(job) and q.lower() in f"{job.title} {job.brief} {job.description}".lower()]
+
+
+def deadline_passed(job):
+    value = (job.description or {}).get("terms", {}).get("deadline")
+    return bool(value and datetime.fromisoformat(value.replace("Z", "+00:00")) <= datetime.now(UTC))
 
 
 @router.get("/jobs/{job_id}")
 def job_details(job_id: int, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
-    if not job or job.status != "ready" or not job.creator_id or not job.company_id:
+    if not job or job.status != "ready" or not job.creator_id or not job.company_id or deadline_passed(job):
         raise HTTPException(404, "This job is not open for applications")
     company, creator = db.get(Company, job.company_id), db.get(User, job.creator_id)
     if not company or company.active is False or not creator or creator.disabled:
@@ -185,7 +209,7 @@ class ApplyIn(BaseModel):
 @router.post("/applications", status_code=201)
 def apply(body: ApplyIn, user: User = Depends(require_candidate), db: Session = Depends(get_db)):
     job = db.get(Job, body.job_id)
-    if not job or job.status != "ready" or not job.creator_id or not job.company_id:
+    if not job or job.status != "ready" or not job.creator_id or not job.company_id or deadline_passed(job):
         raise HTTPException(409, "This job is no longer accepting applications")
     company, creator = db.get(Company, job.company_id), db.get(User, job.creator_id)
     if not company or company.active is False or not creator or creator.disabled:
@@ -317,6 +341,8 @@ def evaluate_record(application, db, llm, embedder, *, force=False, commit=True,
     weights = {key: value / total for key, value in weights.items()}
     # Save the scoring inputs alongside the result; later resume/job edits cannot rewrite the explanation.
     assessment = {"overall_score": result.overall_score, "breakdown": result.breakdown,
+                  "scoring_version": SCORING_VERSION, "requirements_snapshot": requirements.model_dump(),
+                  "eligibility_checks": getattr(result, "eligibility_checks", []),
                   "weights": weights, "summary": result.summary, "strengths": result.strengths,
                   "gaps": result.gaps, "evidence": [e.model_dump() for e in result.evidence],
                   "skill_details": [{"skill": s.skill, "kind": s.kind, "status": s.status} for s in result.skill_details],
@@ -438,5 +464,5 @@ def update_status(application_id: int, body: StatusIn, user: User = Depends(requ
 def candidate_interviews(application_id: int, user: User = Depends(require_candidate), db: Session = Depends(get_db)):
     owned_application(db, application_id, user)
     return [{"id": i.id, "title": i.title, "status": i.status, "scheduled_at": i.scheduled_at,
-             "location": i.location, "candidate_feedback": i.candidate_feedback}
+             "location": i.location, "duration_minutes": i.duration_minutes or 60, "candidate_feedback": i.candidate_feedback}
             for i in db.scalars(select(HiringInterview).where(HiringInterview.application_id == application_id).order_by(HiringInterview.id.desc()))]

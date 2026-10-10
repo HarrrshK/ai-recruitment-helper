@@ -38,7 +38,7 @@ def _utc(moment: datetime) -> str:
 
 def build_ics(
     *, uid: str, starts_at: datetime, duration_minutes: int, summary: str, description: str = "",
-    location: str = "", attendee_email: str | None = None, now: datetime | None = None,
+    location: str = "", attendee_email: str | None = None, now: datetime | None = None, sequence: int = 0,
 ) -> str:
     if starts_at.tzinfo is None:
         raise ValueError("starts_at must include a timezone")
@@ -56,6 +56,6 @@ def build_ics(
         lines.append(f"LOCATION:{_escape(location)}")
     if attendee_email and _EMAIL.match(attendee_email):
         lines.append(f"ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE:mailto:{attendee_email}")
-    lines += ["STATUS:CONFIRMED", "SEQUENCE:0", "BEGIN:VALARM", "TRIGGER:-PT30M", "ACTION:DISPLAY",
+    lines += ["STATUS:CONFIRMED", f"SEQUENCE:{max(0, sequence)}", "BEGIN:VALARM", "TRIGGER:-PT30M", "ACTION:DISPLAY",
               "DESCRIPTION:Interview reminder", "END:VALARM", "END:VEVENT", "END:VCALENDAR"]
     return "\r\n".join(part for line in lines for part in _fold(line)) + "\r\n"

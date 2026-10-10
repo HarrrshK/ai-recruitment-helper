@@ -1,6 +1,7 @@
 // Mirrors the FastAPI response models (backend/app/routers and backend/app/agents).
 
 export type Requirements = {
+  project_expectations?: string[]; mandatory_requirements?: string[];
   must_have_skills: string[];
   nice_to_have_skills: string[];
   min_years_experience: number;
@@ -9,6 +10,9 @@ export type Requirements = {
 };
 
 export type Job = {
+  company_name?: string; location?: string; work_mode?: string; employment_type?: string;
+  deadline?: string | null; deadline_passed?: boolean; openings?: number | null;
+  salary_min?: number | null; salary_max?: number | null; salary_currency?: string;
   id: number;
   title: string;
   brief: string;
@@ -92,7 +96,7 @@ export type Evidence = {
   in_original?: boolean | null;
 };
 
-export type ScoreParts = "skills" | "semantic" | "experience" | "ai_review" | "eligibility" | "projects";
+export type ScoreParts = "skills" | "semantic" | "experience" | "ai_review" | "eligibility" | "projects" | "education";
 
 export type CandidateBrief = {
   id: number;

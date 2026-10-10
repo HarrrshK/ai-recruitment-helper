@@ -2,12 +2,12 @@
 import { Button } from "@/components/ui/button";
 import { RotateCcw } from "lucide-react";
 
-export const defaultWeights: Record<string, number> = { skills: 30, experience: 20, semantic: 10, ai_review: 40, eligibility: 0, projects: 0 };
+export const defaultWeights: Record<string, number> = { skills: 30, experience: 20, semantic: 10, ai_review: 40, projects: 0, education: 0 };
 const criteria = [
-  ["eligibility", "Baseline eligibility", "Required skills and minimum years only. Not education, legal eligibility or an automatic rejection rule."],
+  ["education", "Education compatibility", "Only scored when an education requirement is specified. Resume education is compared with that requirement; credentials still need verification."],
   ["skills", "Skill coverage", "Evidence of required and preferred skills; demonstrated skills count more than listed skills."],
   ["experience", "Relevant experience", "Years compared with the minimum, adjusted for relevance."],
-  ["projects", "Project evidence", "Required and preferred skills mentioned in an explicit Projects section. Missing project evidence scores zero."],
+  ["projects", "Project relevance", "Only scored against explicit project expectations. No project expectations means this criterion is excluded."],
   ["semantic", "Semantic relevance", "Similarity between the role and professional experience."],
   ["ai_review", "AI evidence review", "Skills evidence and domain fit, with verified resume quotations."],
 ];
